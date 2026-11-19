@@ -1,6 +1,6 @@
 # 0069. A client that cannot decode the source gets an on-the-fly repackage
 
-**Status:** Accepted
+**Status:** Accepted (amended by [ADR-0126](0126-a-stream-plan-is-also-a-seekable-hls-presentation.md): a stream plan is also a seekable HLS presentation)
 **Date:** 2026-09-03
 **Builds on:** ADR-0013 (blob serving is a contract), ADR-0023 (the toolchain is optional), ADR-0040 (a renderer fetches with a capability), ADR-0044 (the client blob route serves partials)
 **Refs:** #202, #432, §33, §68, §70

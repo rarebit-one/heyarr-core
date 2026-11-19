@@ -73,8 +73,52 @@ type StreamSpec struct {
 	ToneMap ToneMap
 	// Start seeks the input to this many seconds before producing anything.
 	// A restarted stream, not a seek within one (§33 note in ADR-0069).
+	// Ignored when Segmented is set, which carries its own start.
 	Start float64
+	// Segmented shapes the output for the HLS segmenter (ADR-0126) rather
+	// than for a player: timestamps on a timeline every restart shares, so a
+	// segment made by one ffmpeg is interchangeable with the same segment made
+	// by another. Nil is the live stream of ADR-0069.
+	Segmented *Segmented
 }
+
+// Segmented is an HLS production run: where it starts, on which timeline.
+//
+// There are two timelines, because the two video arms find their segment
+// boundaries differently (see internal/media/hls):
+//
+//   - A copied picture is cut at the source's own keyframes, so the output
+//     keeps the SOURCE's timestamps (-copyts), and the run starts by seeking
+//     to just after the keyframe it begins at. The demuxer lands on that
+//     keyframe — or, with a coarse index, an earlier one, whose fragments the
+//     segmenter discards.
+//   - A re-encoded picture is cut where this run forces keyframes, every
+//     KeyframeSeconds from where it starts. The run seeks exactly to its
+//     first boundary (an accurate seek) and its output timeline is offset so
+//     that boundary lands where every other run puts it. -copyts is NOT used:
+//     the forced-keyframe clock must start at the run's first frame, and what
+//     it counts from under -copyts is not the same in every ffmpeg release.
+type Segmented struct {
+	// From is the first segment boundary this run produces, in seconds on the
+	// segment timeline. For a copied picture that is the source's own
+	// presentation time; for a re-encode it is seconds after the source's
+	// start time.
+	From float64
+	// SeekPast is how far past From the input seek aims, for a copied
+	// picture: enough that the boundary keyframe is the last one at or before
+	// the seek point, however the index rounds it. Zero for a re-encode.
+	SeekPast float64
+	// KeyframeSeconds is the forced keyframe cadence of a re-encode, which is
+	// the segment length. Ignored when the picture is copied.
+	KeyframeSeconds float64
+}
+
+// SegmentTimelineOffset is added to every output timestamp of a segmented
+// run. A fragment's decode time is unsigned, and the first frames of a film
+// with B-frames, or the encoder priming of an AAC track, decode BEFORE zero;
+// without the offset they wrap to the far end of a 64-bit clock. Ten seconds
+// is far more than any decoder delay. The segmenter subtracts it again.
+const SegmentTimelineOffset = 10.0
 
 // ToneMap names the HDR transfer a re-encode tone-maps from.
 type ToneMap string
@@ -158,16 +202,87 @@ func toneMapFilters(from ToneMap) []string {
 //
 //	-f mp4 -            to stdout, which is the response.
 func StreamArgs(spec StreamSpec) []string {
+	if spec.Segmented != nil {
+		return segmentedArgs(spec)
+	}
 	args := []string{"-hide_banner", "-loglevel", "warning", "-nostdin"}
 	if spec.Start > 0 {
 		args = append(args, "-ss", strconv.FormatFloat(spec.Start, 'f', 3, 64))
 	}
-	args = append(args, "-i", spec.Source, "-map", "0:V:0?", "-map", fmt.Sprintf("0:a:%d?", spec.AudioTrack))
+	args = append(args, "-i", spec.Source)
+	args = append(args, codecArgs(spec, "expr:gte(t,n_forced*1)")...)
+	return append(args,
+		"-movflags", "frag_keyframe+empty_moov+default_base_moof+delay_moov",
+		"-frag_duration", "1000000", "-f", "mp4", "-")
+}
+
+// segmentedArgs is StreamArgs for an HLS production run (ADR-0126). The
+// codec decisions are StreamArgs' own; what differs is the clock:
+//
+//	-noaccurate_seek    a copied picture starts at the keyframe the demuxer
+//	-ss -seek_timestamp lands on, and so does the audio beside it. -ss is
+//	-copyts             the source's own timestamp, not offset by its start
+//	                    time, and the output keeps the source's timestamps.
+//	-ss (re-encode)     an accurate seek to the first boundary, relative to
+//	                    the source's start like ffmpeg's ordinary -ss, so the
+//	                    forced-keyframe clock (t) starts at it.
+//	-force_key_frames   one keyframe per segment, at every boundary.
+//	-output_ts_offset   SegmentTimelineOffset, plus a re-encode's From: every
+//	                    run of the same segment carries the same timestamps.
+//	-avoid_negative_ts  disabled, and +frag_discont: each fragment's decode
+//	                    time is the packet's, not a count from zero. Without
+//	                    both, the muxer rebases every run to start at zero
+//	                    and segment 40 of one run is segment 0 of another.
+//	-use_editlist 0     no edit list, so the init segment is the same bytes
+//	-map_metadata -1    from every run; it carries no per-run offset and no
+//	-map_chapters -1    creation time.
+//	-video_track_timescale  fixed, for the same reason.
+//	-movflags           a fragment per keyframe (the segmenter's unit) and no
+//	                    -frag_duration, which would cut fragments between
+//	                    keyframes and leave a segment boundary mid-fragment.
+func segmentedArgs(spec StreamSpec) []string {
+	seg := spec.Segmented
+	args := []string{"-hide_banner", "-loglevel", "warning", "-nostdin"}
+	offset := SegmentTimelineOffset
+	keyframes := ""
+	if spec.CopyVideo {
+		args = append(args, "-noaccurate_seek")
+		if seg.From > 0 || seg.SeekPast > 0 {
+			args = append(args, "-ss", strconv.FormatFloat(seg.From+seg.SeekPast, 'f', 6, 64), "-seek_timestamp", "1")
+		}
+		args = append(args, "-copyts")
+	} else {
+		if seg.From > 0 {
+			args = append(args, "-ss", strconv.FormatFloat(seg.From, 'f', 6, 64))
+		}
+		offset += seg.From
+		every := seg.KeyframeSeconds
+		if every <= 0 {
+			every = 6
+		}
+		keyframes = "expr:gte(t,n_forced*" + strconv.FormatFloat(every, 'f', -1, 64) + ")"
+	}
+	args = append(args, "-i", spec.Source)
+	args = append(args, codecArgs(spec, keyframes)...)
+	return append(args,
+		"-avoid_negative_ts", "disabled",
+		"-output_ts_offset", strconv.FormatFloat(offset, 'f', 6, 64),
+		"-use_editlist", "0", "-map_metadata", "-1", "-map_chapters", "-1",
+		"-video_track_timescale", "90000",
+		"-movflags", "frag_keyframe+empty_moov+default_base_moof+delay_moov+frag_discont",
+		"-f", "mp4", "-")
+}
+
+// codecArgs is the stream selection and the per-stream copy or re-encode,
+// shared by both output shapes. forceKeyFrames is the re-encode's keyframe
+// expression.
+func codecArgs(spec StreamSpec, forceKeyFrames string) []string {
+	args := []string{"-map", "0:V:0?", "-map", fmt.Sprintf("0:a:%d?", spec.AudioTrack)}
 	if spec.CopyVideo {
 		args = append(args, "-c:v", "copy")
 	} else {
 		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-			"-force_key_frames", "expr:gte(t,n_forced*1)")
+			"-force_key_frames", forceKeyFrames)
 		var filters []string
 		if spec.MaxHeight > 0 {
 			// -2 keeps the width even, which libx264 with yuv420p requires.
@@ -188,9 +303,7 @@ func StreamArgs(spec StreamSpec) []string {
 	} else {
 		args = append(args, "-c:a", "aac", "-ac", "2", "-b:a", "192k")
 	}
-	return append(args,
-		"-movflags", "frag_keyframe+empty_moov+default_base_moof+delay_moov",
-		"-frag_duration", "1000000", "-f", "mp4", "-")
+	return args
 }
 
 // StreamerOptions configure a Streamer.
@@ -338,9 +451,13 @@ func (s *Streamer) Stream(ctx context.Context, spec StreamSpec, w io.Writer) err
 	cmd.Stdout = w
 
 	started := time.Now()
-	s.log.Info("stream starting", "source", Base(spec.Source),
+	start, shape := spec.Start, "live"
+	if spec.Segmented != nil {
+		start, shape = spec.Segmented.From, "segmented"
+	}
+	s.log.Info("stream starting", "source", Base(spec.Source), "shape", shape,
 		"copy_video", spec.CopyVideo, "copy_audio", spec.CopyAudio,
-		"max_height", spec.MaxHeight, "tone_map", string(spec.ToneMap), "start", spec.Start, "active", s.Active())
+		"max_height", spec.MaxHeight, "tone_map", string(spec.ToneMap), "start", start, "active", s.Active())
 
 	err := cmd.Run()
 	elapsed := time.Since(started)

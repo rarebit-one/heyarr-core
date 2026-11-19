@@ -120,6 +120,13 @@ type PlanResponse struct {
 	URL    string `json:"url,omitempty"`
 	MIME   string `json:"mime,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	// HLSURL is the same repackage as a seekable HLS presentation
+	// (ADR-0126): a VOD playlist of the whole film, fetched with no
+	// credential. Present only beside `mode: stream` on a node that can
+	// segment; a client that ignores it plays `url` as before. HLSMIME is
+	// the playlist's media type.
+	HLSURL  string `json:"hls_url,omitempty"`
+	HLSMIME string `json:"hls_mime,omitempty"`
 	// Source is what the probe found, so a client can show "AC-3 5.1" next
 	// to the reason it is being served a stream.
 	Source *SourceInfo `json:"source,omitempty"`

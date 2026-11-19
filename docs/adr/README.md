@@ -75,7 +75,7 @@ An ADR that merely describes the code is not worth having.
 | [0066](0066-the-node-hosts-the-voidbind-relay-beside-its-legacy-pair-relay.md) | The node hosts the Voidbind relay beside its legacy pair relay | Accepted (amended: the legacy relay is retired) |
 | [0067](0067-a-paired-device-enrols-itself-and-earns-only-the-read-floor.md) | A paired device enrols itself, and earns only the read floor | Accepted |
 | [0068](0068-membership-ops-replace-root-only-certs.md) | Membership ops replace root-only certs | Accepted |
-| [0069](0069-a-client-that-cannot-decode-the-source-gets-an-on-the-fly-repackage.md) | A client that cannot decode the source gets an on-the-fly repackage | Accepted |
+| [0069](0069-a-client-that-cannot-decode-the-source-gets-an-on-the-fly-repackage.md) | A client that cannot decode the source gets an on-the-fly repackage | Accepted (amended by 0126: also a seekable HLS presentation) |
 | [0070](0070-a-device-refusal-hints-only-at-a-clock.md) | A device refusal hints only at a clock, a proof's life is capped, and a session dies with its approver | Accepted |
 | [0071](0071-an-edition-is-deletable-and-a-followed-work-refuses-it.md) | An edition is deletable, logically, and a followed work refuses it | Accepted |
 | [0072](0072-opt-in-native-tls-on-the-client-api.md) | Opt-in native TLS on the client API, and an explicit public origin | Accepted |
@@ -120,3 +120,4 @@ An ADR that merely describes the code is not worth having.
 | [0123](0123-playback-chooses-among-a-works-copies-by-what-the-client-can-show.md) | Playback chooses among a work's copies by what the client can show | Accepted |
 | [0124](0124-a-library-is-renamed-in-place-its-id-is-its-identity.md) | A library is renamed in place; its id is its identity | Accepted |
 | [0125](0125-an-hdr-re-encode-for-an-sdr-screen-is-tone-mapped.md) | An HDR re-encode for an SDR screen is tone-mapped, and one that cannot be is refused | Accepted |
+| [0126](0126-a-stream-plan-is-also-a-seekable-hls-presentation.md) | A stream plan is also a seekable HLS presentation, cut where every run cuts it | Proposed |

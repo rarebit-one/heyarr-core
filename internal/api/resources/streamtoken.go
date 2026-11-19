@@ -104,10 +104,56 @@ func streamSubject(id auth.Identity) string {
 }
 
 // streamKey derives the signing key from the node's secret.
-func streamKey(secret []byte) []byte {
+func streamKey(secret []byte) []byte { return deriveKey(secret, "heyarr playback stream token s1") }
+
+// hlsKey derives the HLS capability's signing key (ADR-0126): a third key
+// from the same secret, so neither a stream token nor a render capability
+// verifies as one, nor one as either.
+func hlsKey(secret []byte) []byte { return deriveKey(secret, "heyarr playback hls capability h1") }
+
+func deriveKey(secret []byte, label string) []byte {
 	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte("heyarr playback stream token s1"))
+	mac.Write([]byte(label))
 	return mac.Sum(nil)
+}
+
+// The HLS capability (ADR-0126).
+//
+// It is the stream token's plan — blob, repackage, audio track, expiry — under
+// its own version and key, and it is a CAPABILITY, like the render route's
+// (ADR-0040): presenting it is the whole authority. A Cast receiver or a
+// television fetches the playlist and every segment itself, with no
+// credential to present, so the route cannot be behind the bearer middleware
+// and the token cannot be bound to the caller. Subject still records which
+// credential planned it, for the log, and is not checked.
+//
+// It lives long enough to watch the film: the playlist is fetched once and the
+// segments over the whole running time, each a new request, so an hour-long
+// token would cut a film off in the middle. A paused film past expiry
+// re-plans, which is one request.
+const hlsTokenVersion = "h1"
+
+// hlsTokenTTL is how long an HLS capability is good for, given the film's
+// running time.
+func hlsTokenTTL(duration float64) time.Duration {
+	return hlsTokenSlack + time.Duration(duration*float64(time.Second))
+}
+
+const hlsTokenSlack = 6 * time.Hour
+
+func (t streamToken) signHLS(key []byte) (string, error) { return t.signAs(key, hlsTokenVersion) }
+
+// verifyHLSToken checks an HLS capability. There is no subject to compare:
+// see hlsTokenVersion.
+func verifyHLSToken(key []byte, token string, now time.Time) (streamToken, error) {
+	t, version, err := openToken(key, token, now)
+	if err != nil {
+		return streamToken{}, err
+	}
+	if version != hlsTokenVersion {
+		return streamToken{}, errStreamTokenMalformed
+	}
+	return t, nil
 }
 
 // newStreamSecret mints a per-process secret for a node with none configured.
@@ -121,7 +167,9 @@ func newStreamSecret() ([]byte, error) {
 	return b, nil
 }
 
-func (t streamToken) payload() string {
+func (t streamToken) payload() string { return t.payloadAs(streamTokenVersion) }
+
+func (t streamToken) payloadAs(version string) string {
 	flags := 0
 	if t.CopyVideo {
 		flags |= 1
@@ -136,7 +184,7 @@ func (t streamToken) payload() string {
 		flags |= flagToneMapHLG
 	}
 	return strings.Join([]string{
-		streamTokenVersion,
+		version,
 		b64([]byte(t.BlobHash)),
 		b64([]byte(t.Subject)),
 		strconv.Itoa(flags),
@@ -148,7 +196,9 @@ func (t streamToken) payload() string {
 
 // sign renders the token. Every field is base64url-encoded before joining so
 // no field can carry the delimiter, and the signature covers all of them.
-func (t streamToken) sign(key []byte) (string, error) {
+func (t streamToken) sign(key []byte) (string, error) { return t.signAs(key, streamTokenVersion) }
+
+func (t streamToken) signAs(key []byte, version string) (string, error) {
 	if len(key) == 0 {
 		return "", errors.New("stream token: a signing key is required")
 	}
@@ -158,7 +208,7 @@ func (t streamToken) sign(key []byte) (string, error) {
 	if t.BlobHash == "" || t.Subject == "" || t.ExpiresAt.IsZero() {
 		return "", errors.New("stream token: a blob, a subject and an expiry are required")
 	}
-	p := t.payload()
+	p := t.payloadAs(version)
 	return p + "." + b64(streamMAC(key, p)), nil
 }
 
@@ -166,52 +216,68 @@ func (t streamToken) sign(key []byte) (string, error) {
 // first, then shape, then expiry, then the subject — reading any field before
 // the signature has been checked is trusting a field nobody authenticated.
 func verifyStreamToken(key []byte, token, subject string, now time.Time) (streamToken, error) {
+	t, version, err := openToken(key, token, now)
+	if err != nil {
+		return streamToken{}, err
+	}
+	if version != "s1" && version != streamTokenVersion {
+		return streamToken{}, errStreamTokenMalformed
+	}
+	if subtle.ConstantTimeCompare([]byte(t.Subject), []byte(subject)) != 1 {
+		return streamToken{}, errStreamTokenSubject
+	}
+	return t, nil
+}
+
+// openToken checks a token's signature, shape and expiry and returns it with
+// its version. Who may present it is the caller's question.
+func openToken(key []byte, token string, now time.Time) (streamToken, string, error) {
 	if len(key) == 0 {
-		return streamToken{}, errors.New("stream token: a signing key is required")
+		return streamToken{}, "", errors.New("stream token: a signing key is required")
 	}
 	cut := strings.LastIndex(token, ".")
 	if cut < 0 {
-		return streamToken{}, errStreamTokenMalformed
+		return streamToken{}, "", errStreamTokenMalformed
 	}
 	payload, signature := token[:cut], token[cut+1:]
 	got, err := unb64(signature)
 	if err != nil {
-		return streamToken{}, errStreamTokenMalformed
+		return streamToken{}, "", errStreamTokenMalformed
 	}
 	if subtle.ConstantTimeCompare(streamMAC(key, payload), got) != 1 {
-		return streamToken{}, errStreamTokenSignature
+		return streamToken{}, "", errStreamTokenSignature
 	}
 
 	fields := strings.Split(payload, ".")
 	legacy := len(fields) == 6 && fields[0] == "s1"
-	if !legacy && (len(fields) != 7 || fields[0] != streamTokenVersion) {
-		return streamToken{}, errStreamTokenMalformed
+	if !legacy && (len(fields) != 7 || fields[0] != streamTokenVersion && fields[0] != hlsTokenVersion) {
+		return streamToken{}, "", errStreamTokenMalformed
 	}
 	blob, err := unb64(fields[1])
 	if err != nil {
-		return streamToken{}, errStreamTokenMalformed
+		return streamToken{}, "", errStreamTokenMalformed
 	}
 	subj, err := unb64(fields[2])
 	if err != nil {
-		return streamToken{}, errStreamTokenMalformed
+		return streamToken{}, "", errStreamTokenMalformed
 	}
 	flags, err := strconv.Atoi(fields[3])
 	if err != nil || flags < 0 || flags > 15 || flags&flagToneMapPQ != 0 && flags&flagToneMapHLG != 0 {
-		return streamToken{}, errStreamTokenMalformed
+		return streamToken{}, "", errStreamTokenMalformed
 	}
 	height, err := strconv.Atoi(fields[4])
 	if err != nil || height < 0 {
-		return streamToken{}, errStreamTokenMalformed
+		return streamToken{}, "", errStreamTokenMalformed
 	}
 	unix, err := strconv.ParseInt(fields[5], 10, 64)
 	if err != nil {
-		return streamToken{}, errStreamTokenMalformed
+		return streamToken{}, "", errStreamTokenMalformed
 	}
 	audioTrack := 0
 	if !legacy {
 		audioTrack, err = strconv.Atoi(fields[6])
 		if err != nil || audioTrack < 0 {
-			return streamToken{}, errStreamTokenMalformed
+			return streamToken{}, "", errStreamTokenMalformed
 		}
 	}
 	t := streamToken{
@@ -225,12 +291,9 @@ func verifyStreamToken(key []byte, token, subject string, now time.Time) (stream
 		ExpiresAt:  time.Unix(unix, 0).UTC(),
 	}
 	if !now.Before(t.ExpiresAt) {
-		return streamToken{}, errStreamTokenExpired
+		return streamToken{}, "", errStreamTokenExpired
 	}
-	if subtle.ConstantTimeCompare([]byte(t.Subject), []byte(subject)) != 1 {
-		return streamToken{}, errStreamTokenSubject
-	}
-	return t, nil
+	return t, fields[0], nil
 }
 
 // The tone-map's flag bits. One at most: a picture has one transfer.

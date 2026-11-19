@@ -2245,6 +2245,149 @@ paths:
       responses:
         '200': { description: The renderer's state after seeking. }
         '502': { description: The renderer refused. }
+  /render/hls/{token}/index.m3u8:
+    parameters:
+      - $ref: "#/components/parameters/HLSCapability"
+    get:
+      tags: [playback]
+      operationId: getHLSPlaylist
+      security: []
+      summary: The seekable HLS presentation of a `stream` plan (ADR-0126).
+      description: |
+        A VOD media playlist (RFC 8216, version 7) for the repackage the
+        capability names — the one `POST /api/v1/playback/plan` returned as
+        `hls_url`. It lists the **whole film**: `EXT-X-PLAYLIST-TYPE:VOD`,
+        `EXT-X-ENDLIST`, an `EXT-X-MAP` init segment (`init.mp4`) and one
+        `EXTINF` per fMP4 segment (`0.m4s`, `1.m4s`, …), relative to the
+        playlist. A player seeks by itself: the durations add up to the film,
+        and segment *n* is the same span of it however it is produced.
+
+        Segment boundaries are fixed before anything is produced. A copied
+        picture is cut at the source's own keyframes — the first keyframe at
+        least six seconds after the last boundary — which the node reads once
+        per blob (a whole-file demux, started at planning time; the first
+        playlist request for a large file may wait for it). A re-encoded
+        picture is cut every six seconds, with a keyframe forced at each.
+
+        **No credential.** The capability in the path is the authority, as on
+        `/render/{capability}`: a Cast receiver or a television fetches the
+        playlist and every segment itself. CORS allows any origin. The
+        capability is signed by this node, names one blob and one repackage,
+        and expires six hours plus the film's running time after planning.
+        Every refusal — bad signature, expired, a blob this node no longer
+        holds — is the same opaque `404`.
+      responses:
+        "200":
+          description: The media playlist.
+          headers:
+            Access-Control-Allow-Origin:
+              schema: { type: string, const: "*" }
+          content:
+            application/vnd.apple.mpegurl:
+              schema: { type: string }
+        "404":
+          description: |
+            No presentation with that capability, or the source cannot be cut
+            into segments (play `url` instead).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+    head:
+      tags: [playback]
+      operationId: headHLSPlaylist
+      security: []
+      summary: The playlist's headers, with no body.
+      responses:
+        "200": { description: The playlist exists. }
+        "404": { description: See `get`. }
+  /render/hls/{token}/init.mp4:
+    parameters:
+      - $ref: "#/components/parameters/HLSCapability"
+    get:
+      tags: [playback]
+      operationId: getHLSInit
+      security: []
+      summary: The presentation's init segment (`ftyp` + `moov`).
+      description: |
+        The same bytes from every production run of one capability. Fetching
+        it starts production when nothing has yet.
+      responses:
+        "200":
+          description: The init segment.
+          content:
+            video/mp4:
+              schema: { type: string, format: binary }
+        "404":
+          description: See the playlist.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429":
+          description: |
+            Every stream slot on this node is in use (`media.stream_concurrency`,
+            shared with the live stream); retry after `Retry-After`.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+    head:
+      tags: [playback]
+      operationId: headHLSInit
+      security: []
+      summary: The init segment's headers, with no body.
+      responses:
+        "200": { description: The init segment. }
+        "404": { description: See `get`. }
+        "429": { description: See `get`. }
+  /render/hls/{token}/{segment}:
+    parameters:
+      - $ref: "#/components/parameters/HLSCapability"
+      - name: segment
+        in: path
+        required: true
+        description: "`<n>.m4s`, a segment number the playlist lists."
+        schema: { type: string, pattern: '^(0|[1-9][0-9]*)\.m4s$' }
+    get:
+      tags: [playback]
+      operationId: getHLSSegment
+      security: []
+      summary: One fMP4 media segment, produced on demand.
+      description: |
+        Opens on a keyframe at its playlist boundary. Produced by one ffmpeg
+        per playing client: a request for the next few segments waits for
+        the run already heading there; a request further away (a seek)
+        stops that run and starts one at the requested segment, so the film
+        in between is never produced. A run stays a few segments ahead of
+        the furthest one asked for and then pauses; one nobody asks anything
+        of for 30 s is stopped, giving its slot back, and an untouched
+        session's segments are deleted after ten minutes. Ranges are
+        honoured.
+      responses:
+        "200":
+          description: The segment.
+          content:
+            video/mp4:
+              schema: { type: string, format: binary }
+        "206":
+          description: The requested range of the segment.
+        "404":
+          description: No such segment, or see the playlist.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429":
+          description: See the init segment.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+    head:
+      tags: [playback]
+      operationId: headHLSSegment
+      security: []
+      summary: A segment's headers, with no body (it is produced if it is not cached).
+      responses:
+        "200": { description: The segment. }
+        "404": { description: See `get`. }
+        "429": { description: See `get`. }
   /render/{capability}:
     parameters:
       - name: capability
@@ -2262,8 +2405,9 @@ paths:
       security: []
       summary: Serve one blob to a device that cannot present a credential.
       description: >-
-        The renderer route of ADR-0040, and the only unauthenticated content
-        path in Heyarr. It exists because a television, a speaker or a
+        The renderer route of ADR-0040, and with the HLS presentation under
+        `/render/hls/` (ADR-0126) the only unauthenticated content paths in
+        Heyarr. It exists because a television, a speaker or a
         projector is handed a URL and told to fetch it: it cannot send an
         `Authorization` header, and `/api/v1/blobs/{hash}/content` therefore
         answers every such device with 401.
@@ -4042,7 +4186,9 @@ paths:
           base) for a client that does not declare `supports_hdr` is
           **tone-mapped** to BT.709 SDR and tagged so (#886); `reason` says
           that too. A node whose ffmpeg lacks the zscale/tonemap filters
-          streams it untone-mapped and says so.
+          streams it untone-mapped and says so. Beside it, `hls_url` offers
+          the same repackage as a seekable HLS presentation (ADR-0126) on a
+          node that can segment.
         - `mode: unplayable` — no peer holds the bytes, and `reason` is
           routing's; or the video needs a re-encode and is Dolby Vision with no
           compatible base layer (profile 5), which this node cannot re-encode
@@ -8016,6 +8162,15 @@ components:
       in: path
       required: true
       schema: { type: string }
+    HLSCapability:
+      name: token
+      in: path
+      required: true
+      description: |
+        The HLS capability from a plan's `hls_url` (ADR-0126). It IS the
+        authority for the request — there is no other credential — so treat
+        it as a secret. The access log redacts it.
+      schema: { type: string }
     publicKey:
       name: key
       in: path
@@ -10066,6 +10221,21 @@ components:
         mime:
           type: string
           description: "`video/mp4` for a stream; the asset's declared type for direct."
+        hls_url:
+          type: string
+          description: |
+            The same repackage as a **seekable HLS presentation** (ADR-0126):
+            `/render/hls/{capability}/index.m3u8`, a VOD playlist listing the
+            whole film in fMP4 segments with an init segment. Present only
+            beside `mode: stream`, and only on a node that can segment (it has
+            ffmpeg and ffprobe and a segment cache). Relative, like `url`.
+            Fetched with **no credential**: the capability in the path is the
+            authority, so it can be handed to a Cast receiver, a television or
+            a relay as it is. Good for six hours plus the film's running time.
+            A client that ignores it plays `url` as before.
+        hls_mime:
+          type: string
+          description: "`application/vnd.apple.mpegurl` whenever `hls_url` is present."
         reason:
           type: string
           description: |

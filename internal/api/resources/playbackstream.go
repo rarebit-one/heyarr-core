@@ -301,6 +301,12 @@ func (a *API) planForClient(
 			return
 		}
 		out.Mode, out.URL, out.MIME, out.Reason = ModeStream, streamPath+token, streamMIME, reason
+		a.offerHLS(ctx, &out, streamToken{
+			BlobHash: blobHash, Subject: streamSubject(id),
+			CopyVideo: leg.CopyVideo, CopyAudio: leg.CopyAudio, MaxHeight: leg.TargetHeight,
+			ToneMap: toneMap, AudioTrack: media.AudioTrack,
+			ExpiresAt: a.now().UTC().Add(hlsTokenTTL(media.DurationSec)),
+		})
 	}
 	a.write(w, r, http.StatusOK, out)
 }

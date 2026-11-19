@@ -946,6 +946,11 @@ type Media struct {
 	// core. Zero means the default of two; a client past the cap is told to
 	// retry rather than queued.
 	StreamConcurrency int `koanf:"stream_concurrency"`
+	// HLSCacheDir holds the segments of the seekable HLS presentation
+	// (ADR-0126) between ffmpeg making them and a player fetching them: a
+	// few per playing client, deleted as the playhead passes and cleared at
+	// start. Defaults to <data_dir>/hls. The live stream needs none.
+	HLSCacheDir string `koanf:"hls_cache_dir"`
 	// AudioLanguages is the node preference for clients that do not supply one.
 	AudioLanguages []string `koanf:"audio_languages"`
 }
@@ -1243,6 +1248,9 @@ func (c *Config) applyDerivedDefaultsFor(serviceName string) {
 	}
 	if c.Backup.Dir == "" && c.DataDir != "" {
 		c.Backup.Dir = filepath.Join(c.DataDir, "backups")
+	}
+	if c.Media.HLSCacheDir == "" && c.DataDir != "" {
+		c.Media.HLSCacheDir = filepath.Join(c.DataDir, "hls")
 	}
 }
 
