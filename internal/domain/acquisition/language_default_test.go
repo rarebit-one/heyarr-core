@@ -113,7 +113,7 @@ func TestALanguageSetEarnsTheBonusAndThePenaltyTogether(t *testing.T) {
 	for i, r := range ranked {
 		pos[r.Candidate.ID] = i
 	}
-	if !(pos["en"] < pos["und"] && pos["und"] < pos["hi-en"] && pos["hi-en"] < pos["hi"]) {
+	if pos["en"] >= pos["und"] || pos["und"] >= pos["hi-en"] || pos["hi-en"] >= pos["hi"] {
 		t.Errorf("ranking should be en > und > hi-en > hi, got positions %v", pos)
 	}
 
