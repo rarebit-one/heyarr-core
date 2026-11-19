@@ -58,7 +58,8 @@ seeks.** The live stream and `url` stay as they are.
   pipe fills, and ffmpeg blocks without being killed. Segments more than three
   behind the playhead are deleted. A run nobody has asked anything of for 30 s
   is stopped. A session untouched for ten minutes is forgotten and its
-  directory removed. The cache (`media.hls_cache_dir`, default
+  directory removed. Both clocks start when the last request is answered: a
+  request still waiting for a slow segment keeps its run and its session. The cache (`media.hls_cache_dir`, default
   `<data_dir>/hls`) is cleared at start: it holds derived bytes nothing
   references.
 - **The cap is shared.** A run takes a `media.stream_concurrency` slot through

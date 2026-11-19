@@ -19,7 +19,7 @@ stable.
   up front (the source's keyframes for a copied picture, every 6 s with forced
   keyframes for a re-encode), and segments are made on demand by one ffmpeg per
   client, retargeted on a seek, a few segments ahead at most, stopped after
-  30 s idle. The routes take a capability in the path and no credential, with
+  30 s with no request waiting. The routes take a capability in the path and no credential, with
   CORS. They share `media.stream_concurrency` with the live stream, which is
   unchanged. A source with no picture is offered the live stream alone. New
   `media.hls_cache_dir`, default `<data_dir>/hls`.
