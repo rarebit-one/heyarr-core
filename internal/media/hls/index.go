@@ -188,7 +188,9 @@ func (x *Indexer) read(ctx context.Context, path string, keyframes bool) (Timing
 		return Timing{}, parseErr
 	}
 	if keyframes && len(t.Keyframes) == 0 {
-		return Timing{}, errors.New("hls: the source lists no video keyframes")
+		// Nothing to cut a copied picture at — an audio-only source among
+		// them. The live stream still plays it.
+		return Timing{}, fmt.Errorf("%w: it lists no video keyframes", ErrNoPlan)
 	}
 	return t, nil
 }

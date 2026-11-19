@@ -21,7 +21,8 @@ stable.
   client, retargeted on a seek, a few segments ahead at most, stopped after
   30 s idle. The routes take a capability in the path and no credential, with
   CORS. They share `media.stream_concurrency` with the live stream, which is
-  unchanged. New `media.hls_cache_dir`, default `<data_dir>/hls`.
+  unchanged. A source with no picture is offered the live stream alone. New
+  `media.hls_cache_dir`, default `<data_dir>/hls`.
 - **Candidates the profile scores equally are ranked by seeders** (#888).
   A tie used to fall to the candidate id, a hash, which picked arbitrarily
   among a dozen releases scoring the same. Torznab and Prowlarr results now

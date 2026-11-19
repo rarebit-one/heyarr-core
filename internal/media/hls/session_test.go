@@ -356,7 +356,7 @@ func TestASeekFarAheadStartsThereAndSkipsTheGap(t *testing.T) {
 			fetch(t, s, 0)
 			// The run makes its readahead and then waits, paused on the pipe,
 			// rather than running on through the film.
-			waitFor(t, func() bool { return s.Position() == hls.DefaultReadahead+1 }, "the run to pause on its readahead")
+			await(t, s, func() bool { return s.Position() == hls.DefaultReadahead+1 }, "the run to pause on its readahead")
 			if got := s.Cached(); len(got) != hls.DefaultReadahead+1 || got[len(got)-1] != hls.DefaultReadahead {
 				t.Fatalf("cached before the seek = %v, want segments 0 to %d", got, hls.DefaultReadahead)
 			}
@@ -448,12 +448,12 @@ func TestIdleRunsStopAndIdleSessionsAreCleanedUp(t *testing.T) {
 	}
 
 	r.m.Sweep(r.clock.advance(hls.DefaultProducerIdle))
-	waitFor(t, func() bool { return r.m.Active() == 0 }, "the idle run to stop")
+	await(t, s, func() bool { return r.m.Active() == 0 }, "the idle run to stop")
 	// The slot is free again: another session can run.
 	other := r.open(t, "other", true)
 	fetch(t, other, 0)
 	r.m.Sweep(r.clock.advance(hls.DefaultProducerIdle))
-	waitFor(t, func() bool { return r.m.Active() == 0 }, "the second idle run to stop")
+	await(t, other, func() bool { return r.m.Active() == 0 }, "the second idle run to stop")
 
 	// The paused player resumes: what it buffered is still served, and the
 	// first segment past it starts a run again.
@@ -463,8 +463,8 @@ func TestIdleRunsStopAndIdleSessionsAreCleanedUp(t *testing.T) {
 
 	r.m.Sweep(r.clock.advance(hls.DefaultSessionIdle))
 	for _, id := range []string{"idle", "other"} {
-		if _, err := os.Stat(filepath.Join(r.root, id)); !os.IsNotExist(err) {
-			t.Errorf("session %s's cache is still on disk after the session ended (%v)", id, err)
+		if left := sessionDirs(t, r.root, id); len(left) != 0 {
+			t.Errorf("session %s's cache is still on disk after the session ended: %v", id, left)
 		}
 	}
 	if r.m.Active() != 0 {
@@ -474,14 +474,108 @@ func TestIdleRunsStopAndIdleSessionsAreCleanedUp(t *testing.T) {
 	fetch(t, r.open(t, "idle", true), 0)
 }
 
-func waitFor(t *testing.T, ok func() bool, what string) {
+// await waits for ok, woken by s's own changes rather than by polling. The
+// minute is a guard against a hang, not a deadline the work races.
+func await(t *testing.T, s *hls.Session, ok func() bool, what string) {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for !ok() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(20 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	if err := s.Await(ctx, ok); err != nil {
+		t.Fatalf("waiting for %s: %v", what, err)
+	}
+}
+
+// sessionDirs is every cache directory of the session id: one per time it was
+// opened.
+func sessionDirs(t *testing.T, root, id string) []string {
+	t.Helper()
+	dirs, err := filepath.Glob(filepath.Join(root, id+".*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dirs
+}
+
+// lingering is a Runner whose runs outlive being stopped until released: an
+// ffmpeg slow to exit.
+type lingering struct {
+	started, release chan struct{}
+}
+
+func (l *lingering) Stream(ctx context.Context, _ ffmpeg.StreamSpec, _ io.Writer) error {
+	l.started <- struct{}{}
+	<-ctx.Done()
+	<-l.release
+	return ctx.Err()
+}
+
+// fixedTiming answers one timing without ffprobe.
+type fixedTiming struct{ t hls.Timing }
+
+func (f fixedTiming) Timing(context.Context, string, string, bool) (hls.Timing, error) {
+	return f.t, nil
+}
+
+func (fixedTiming) Warm(string, string, bool) {}
+
+// A player that resumes just as its idle session is forgotten opens the same
+// id again while the old session is still waiting for its run to exit. The old
+// session's cleanup must not take the new one's cache with it.
+func TestASessionReopenedDuringItsCleanupKeepsItsCache(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "hls")
+	clk := &clock{now: time.Unix(1_800_000_000, 0)}
+	run := &lingering{started: make(chan struct{}, 4), release: make(chan struct{})}
+	m, err := hls.New(hls.Options{
+		Root: root, Runner: run, Now: clk.Now,
+		Index: fixedTiming{t: hls.Timing{Duration: 60, Keyframes: []float64{0, 6, 12, 18, 24, 30, 36, 42, 48, 54}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m.Close)
+	src := hls.Source{Blob: "blob", Spec: ffmpeg.StreamSpec{Source: "film.mkv", CopyVideo: true}}
+
+	old, err := m.Open(t.Context(), "resumed", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initDone := make(chan error, 1)
+	go func() {
+		_, err := old.Init(t.Context())
+		initDone <- err
+	}()
+	<-run.started
+
+	// The session goes idle and is forgotten; its cleanup waits on the run.
+	swept := make(chan struct{})
+	go func() {
+		m.Sweep(clk.advance(hls.DefaultSessionIdle))
+		close(swept)
+	}()
+	// The waiting request sees the session end only once Sweep has let go of
+	// it, so the id is free from here on.
+	if err := <-initDone; err == nil {
+		t.Fatal("init succeeded on a session that ended")
+	}
+
+	again, err := m.Open(t.Context(), "resumed", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again == old {
+		t.Fatal("an ended session was handed out again")
+	}
+	if dirs := sessionDirs(t, root, "resumed"); len(dirs) != 2 {
+		t.Fatalf("cache directories while the old session is still being removed = %v, want the old one and the new one", dirs)
+	}
+
+	close(run.release)
+	<-swept
+	if dirs := sessionDirs(t, root, "resumed"); len(dirs) != 1 {
+		t.Fatalf("cache directories once the old session is removed = %v, want only the new session's", dirs)
+	}
+	if _, err := os.Stat(sessionDirs(t, root, "resumed")[0]); err != nil {
+		t.Errorf("the reopened session lost its cache: %v", err)
 	}
 }
 
@@ -532,5 +626,26 @@ func TestEveryRunWritesTheSameInitSegment(t *testing.T) {
 					len(first), len(later))
 			}
 		})
+	}
+}
+
+// A source with no picture has nothing to cut a copied picture at. The
+// indexer says it cannot be planned, which the route answers with a 404 that
+// sends the player to the live stream, rather than as a fault.
+func TestASourceWithNoPictureCannotBePlanned(t *testing.T) {
+	ffmpegPath, ffprobePath := toolchain(t)
+	src := filepath.Join(t.TempDir(), "song.flac")
+	if b, err := exec.CommandContext(t.Context(), ffmpegPath, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+		"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "5", src).CombinedOutput(); err != nil {
+		t.Fatalf("generating the song: %v\n%s", err, b)
+	}
+	index, err := hls.NewIndexer(ffprobePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	if _, err := index.Timing(ctx, "song", src, true); !errors.Is(err, hls.ErrNoPlan) {
+		t.Errorf("timing a source with no picture for a copy = %v, want ErrNoPlan", err)
 	}
 }

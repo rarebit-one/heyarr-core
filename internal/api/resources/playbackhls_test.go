@@ -189,6 +189,29 @@ func TestWithoutAPresenterThePlanOffersNoHLS(t *testing.T) {
 	}
 }
 
+// A source with no picture still streams, but is offered no playlist: the
+// segments are cut on video keyframes it does not have.
+func TestAnAudioOnlyStreamPlanOffersNoHLS(t *testing.T) {
+	t.Parallel()
+	timing := &fakeTiming{t: hls.Timing{Duration: 240}}
+	h := newHarness(t, withStreamLeg(&fakeStreamer{}, newFakeBlobs(t), nil),
+		withHLS(newPresenter(t, &fakeStreamer{}, timing))).seed()
+	h.exec(`INSERT INTO blob_probes (blob_hash, container, format_long, duration_seconds, bitrate_bps, streams, bytes_read, materialised, probed_at)
+		VALUES (?, 'flac', '', 240, 900000, '[{"index":0,"type":"audio","codec":"flac","channels":2}]', 0, 0, ?)`,
+		blob1Hash, seedTime)
+
+	resp, p := h.planForClient(t, "", asset1ID, phoneNoAC3)
+	if resp.StatusCode != http.StatusOK || p.Mode != "stream" {
+		t.Fatalf("status = %d mode = %q, want a stream for FLAC to a client without it: %s", resp.StatusCode, p.Mode, h.body(resp))
+	}
+	if p.HLSURL != "" || p.HLSMIME != "" {
+		t.Errorf("hls_url = %q hls_mime = %q; a source with no picture has no presentation", p.HLSURL, p.HLSMIME)
+	}
+	if len(timing.warmed) != 0 {
+		t.Errorf("planning warmed %v for a presentation it did not offer", timing.warmed)
+	}
+}
+
 // The whole path with a real ffmpeg: plan, playlist, init, the first segment
 // and one near the end, through the routes a Cast receiver uses.
 func TestAnHLSPresentationIsServedEndToEnd(t *testing.T) {

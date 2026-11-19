@@ -10227,8 +10227,9 @@ components:
             The same repackage as a **seekable HLS presentation** (ADR-0126):
             `/render/hls/{capability}/index.m3u8`, a VOD playlist listing the
             whole film in fMP4 segments with an init segment. Present only
-            beside `mode: stream`, and only on a node that can segment (it has
-            ffmpeg and ffprobe and a segment cache). Relative, like `url`.
+            beside `mode: stream`, only on a node that can segment (it has
+            ffmpeg and ffprobe and a segment cache), and only for a source with
+            a picture. Relative, like `url`.
             Fetched with **no credential**: the capability in the path is the
             authority, so it can be handed to a Cast receiver, a television or
             a relay as it is. Good for six hours plus the film's running time.

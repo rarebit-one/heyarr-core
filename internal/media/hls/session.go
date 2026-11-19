@@ -97,6 +97,10 @@ type Manager struct {
 
 	mu       sync.Mutex
 	sessions map[string]*Session
+	// opened numbers every session the Manager starts, so each has its own
+	// directory: one forgotten while a player resumes is still being removed
+	// when the same id opens again, and must not take the new one's cache.
+	opened uint64
 }
 
 // New builds a Manager and clears its cache directory.
@@ -190,7 +194,8 @@ func (m *Manager) Open(ctx context.Context, id string, src Source) (*Session, er
 		s.touch()
 		return s, nil
 	}
-	dir := filepath.Join(m.root, id)
+	m.opened++
+	dir := filepath.Join(m.root, id+"."+strconv.FormatUint(m.opened, 10))
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("hls: creating a session directory: %w", err)
 	}
@@ -737,7 +742,10 @@ func (s *Session) markLost(from, to int) {
 func (s *Session) waitWindow(ctx context.Context, p *producer, idx int) error {
 	for {
 		s.mu.Lock()
-		p.cursor = idx
+		if p.cursor != idx {
+			p.cursor = idx
+			s.broadcastLocked()
+		}
 		if idx <= s.want+s.m.readahead || s.closed {
 			s.broadcastLocked()
 			s.mu.Unlock()

@@ -301,12 +301,18 @@ func (a *API) planForClient(
 			return
 		}
 		out.Mode, out.URL, out.MIME, out.Reason = ModeStream, streamPath+token, streamMIME, reason
-		a.offerHLS(ctx, &out, streamToken{
-			BlobHash: blobHash, Subject: streamSubject(id),
-			CopyVideo: leg.CopyVideo, CopyAudio: leg.CopyAudio, MaxHeight: leg.TargetHeight,
-			ToneMap: toneMap, AudioTrack: media.AudioTrack,
-			ExpiresAt: a.now().UTC().Add(hlsTokenTTL(media.DurationSec)),
-		})
+		// Segments are cut on the picture's keyframes and fragments, so a
+		// source with no picture (music needing a codec the client lacks) is
+		// offered the live stream alone rather than a playlist that cannot be
+		// made.
+		if media.VideoCodec != "" {
+			a.offerHLS(ctx, &out, streamToken{
+				BlobHash: blobHash, Subject: streamSubject(id),
+				CopyVideo: leg.CopyVideo, CopyAudio: leg.CopyAudio, MaxHeight: leg.TargetHeight,
+				ToneMap: toneMap, AudioTrack: media.AudioTrack,
+				ExpiresAt: a.now().UTC().Add(hlsTokenTTL(media.DurationSec)),
+			})
+		}
 	}
 	a.write(w, r, http.StatusOK, out)
 }

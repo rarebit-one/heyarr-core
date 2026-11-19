@@ -81,8 +81,10 @@ seeks.** The live stream and `url` stay as they are.
   ADR is the record that field's comment asks for.
 - **Advertised, never imposed.** `hls_url` and `hls_mime`
   (`application/vnd.apple.mpegurl`) appear beside `mode: stream` only on a
-  node with ffmpeg, ffprobe and a cache directory. A client that ignores them
-  plays `url` exactly as before.
+  node with ffmpeg, ffprobe and a cache directory, and only for a source with
+  a picture: segments are cut on video keyframes and fragments, so audio alone
+  is offered the live stream. A client that ignores them plays `url` exactly
+  as before.
 
 ## Consequences
 
