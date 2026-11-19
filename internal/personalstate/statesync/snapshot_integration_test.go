@@ -77,8 +77,12 @@ func TestFreshDeviceReachesStateFromSnapshotPlusTail(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Several changes.
-	for _, item := range []string{"one", "two", "three"} {
+	// Several changes. The items double as the needles the opacity check below
+	// looks for in the ciphertext, so each is long enough that random bytes never
+	// contain it by chance: a 3-byte item ("one") turns up somewhere in a ~600-byte
+	// ciphertext about once in 14,000 runs, which is how this test went red (#904).
+	items := []string{"snapshot-item-one", "snapshot-item-two", "snapshot-item-three"}
+	for _, item := range items {
 		put(t, ctx, s, m, sp.ID, item)
 	}
 
@@ -109,17 +113,17 @@ func TestFreshDeviceReachesStateFromSnapshotPlusTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, item := range []string{"one", "two", "three"} {
+	for _, item := range items {
 		if bytes.Contains(stored.Ciphertext, []byte(item)) {
 			t.Fatalf("the stored snapshot contains the plaintext %q — it is not opaque", item)
 		}
 	}
 
 	// Add a tail change AFTER the snapshot.
-	put(t, ctx, s, m, sp.ID, "four")
+	put(t, ctx, s, m, sp.ID, "tail-item-four")
 
 	// Compact: every replica has acknowledged the snapshot's frontier, so the
-	// pre-snapshot changes are dropped. The tail ("four") survives.
+	// pre-snapshot changes are dropped. The tail ("tail-item-four") survives.
 	dropped, err := s.CompactChanges(ctx, sp.ID, heads)
 	if err != nil {
 		t.Fatal(err)
@@ -148,8 +152,8 @@ func TestFreshDeviceReachesStateFromSnapshotPlusTail(t *testing.T) {
 	}
 	base.Apply(tailDecoded...)
 
-	if got := base.IDs(); !equalStrings(got, append(full, "four")) {
-		t.Fatalf("snapshot+tail reached %v, want %v", got, append(full, "four"))
+	if got := base.IDs(); !equalStrings(got, append(full, "tail-item-four")) {
+		t.Fatalf("snapshot+tail reached %v, want %v", got, append(full, "tail-item-four"))
 	}
 }
 
