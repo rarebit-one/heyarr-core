@@ -18,13 +18,13 @@ heyarr library root add <library> <path> [flags]
 ### Options
 
 ```
-      --addr string          where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --disabled             add the root but do not scan it yet
-      --ingest-mode string   how bytes are materialised for this root: reflink, hardlink, copy or link (ADR-0014, ADR-0020) (default "reflink")
-      --json                 emit machine-readable JSON
-      --timeout duration     how long one request may take; streaming reads and the event stream are exempt (default 30s)
-      --token string         bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
-      --token-file string    read the bearer token from this file (default: <data_dir>/cli.token when it exists)
+      --addr string             where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
+      --disabled[=true|false]   add the root but do not scan it yet
+      --ingest-mode string      how bytes are materialised for this root: reflink, hardlink, copy or link (ADR-0014, ADR-0020) (default "reflink")
+      --json[=true|false]       emit machine-readable JSON
+      --timeout duration        how long one request may take; streaming reads and the event stream are exempt (default 30s)
+      --token string            bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
+      --token-file string       read the bearer token from this file (default: <data_dir>/cli.token when it exists)
 ```
 
 ### Options inherited from parent commands

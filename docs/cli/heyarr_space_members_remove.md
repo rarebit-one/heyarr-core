@@ -30,10 +30,10 @@ heyarr space members remove <space-id> --user <principal> [flags]
 ### Options
 
 ```
-      --addr string        where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --json               emit machine-readable JSON
-      --timeout duration   how long one request may take (default 30s)
-      --user string        the user to remove, by principal name or id
+      --addr string         where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
+      --json[=true|false]   emit machine-readable JSON
+      --timeout duration    how long one request may take (default 30s)
+      --user string         the user to remove, by principal name or id
 ```
 
 ### Options inherited from parent commands

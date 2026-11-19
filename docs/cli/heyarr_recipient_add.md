@@ -22,7 +22,7 @@ heyarr recipient add --executor <principal> --pub x25519:<hex> [flags]
       --addr string          where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
       --executor string      the executor principal, by name or id
       --fingerprint string   the fingerprint the executor's host displayed (prompted for when absent)
-      --json                 emit machine-readable JSON
+      --json[=true|false]    emit machine-readable JSON
       --label string         a note to recognise the executor by (no secrets: the controller stores it in the clear)
       --pub string           the executor's X25519 public key, x25519:<hex>
       --timeout duration     how long one request may take (default 30s)

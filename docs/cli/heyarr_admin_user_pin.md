@@ -26,7 +26,7 @@ heyarr admin user pin <name> <ed25519:public-key> [flags]
 ### Options
 
 ```
-      --json                  emit machine-readable JSON
+      --json[=true|false]     emit machine-readable JSON
       --recovery-key string   the identity's x25519 recovery encryption PUBLIC key (x25519:<hex>; required)
 ```
 

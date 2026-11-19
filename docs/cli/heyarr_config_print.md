@@ -15,7 +15,7 @@ heyarr config print [flags]
 ### Options
 
 ```
-      --redacted   hide secret values (no-op today — configuration holds no secrets)
+      --redacted[=true|false]   hide secret values (no-op today — configuration holds no secrets)
 ```
 
 ### Options inherited from parent commands

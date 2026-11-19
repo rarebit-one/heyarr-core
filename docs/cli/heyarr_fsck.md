@@ -35,9 +35,9 @@ heyarr fsck [flags]
 ### Options
 
 ```
-      --deep     re-hash every blob instead of checking existence and length
-      --json     emit machine-readable JSON
-      --repair   rebuild damaged blobs from intact chunks plus replacements from a peer (ADR-0036)
+      --deep[=true|false]     re-hash every blob instead of checking existence and length
+      --json[=true|false]     emit machine-readable JSON
+      --repair[=true|false]   rebuild damaged blobs from intact chunks plus replacements from a peer (ADR-0036)
 ```
 
 ### Options inherited from parent commands

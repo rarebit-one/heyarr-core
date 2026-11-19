@@ -21,9 +21,9 @@ heyarr identity generate [flags]
 ### Options
 
 ```
-      --force         replace an existing identity — unrecoverable
-      --json          emit machine-readable JSON
-      --name string   what to call this identity (default: derived from this machine's hostname)
+      --force[=true|false]   replace an existing identity — unrecoverable
+      --json[=true|false]    emit machine-readable JSON
+      --name string          what to call this identity (default: derived from this machine's hostname)
 ```
 
 ### Options inherited from parent commands

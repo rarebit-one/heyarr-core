@@ -55,7 +55,7 @@ heyarr peers add [flags]
 ```
       --addr string         where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
       --endpoint string     where to reach the peer, as https://192.168.1.10:8443, a bare host:port or unix:///path; not its identity
-      --json                emit machine-readable JSON
+      --json[=true|false]   emit machine-readable JSON
       --mode string         full, partial, cache, archive or compute (§9) (default "full")
       --name string         the peer's name, unique within this instance
       --public-key string   the peer's Ed25519 public key as ed25519:<64 hex characters> — who it is (required)

@@ -29,12 +29,12 @@ heyarr scan <library> [flags]
 
 ```
       --addr string              where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --json                     emit machine-readable JSON
+      --json[=true|false]        emit machine-readable JSON
       --poll-interval duration   how often --wait re-reads job state as a backstop to the event stream; 0 waits on events alone (default 1s)
       --timeout duration         how long one request may take; streaming reads and the event stream are exempt (default 30s)
       --token string             bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
       --token-file string        read the bearer token from this file (default: <data_dir>/cli.token when it exists)
-      --wait                     wait for every enqueued scan job to finish
+      --wait[=true|false]        wait for every enqueued scan job to finish
       --wait-timeout duration    give up waiting after this long (default: wait indefinitely)
 ```
 

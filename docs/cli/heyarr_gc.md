@@ -32,12 +32,12 @@ heyarr gc [flags]
 ### Options
 
 ```
-      --apply                 actually reclaim; without it nothing is changed
-      --dry-run               report what would be reclaimed without doing it (the default) (default true)
-      --grace duration        how long a blob must have been unreferenced before its bytes may be freed (default 168h0m0s)
-      --honour-releases       reclaim the last copy of released vault blobs after the grace window (default: on for the personal profile, off for media)
-      --json                  emit machine-readable JSON
-      --temp-grace duration   how old a partial write must be before it is swept (default 24h0m0s)
+      --apply[=true|false]             actually reclaim; without it nothing is changed
+      --dry-run[=true|false]           report what would be reclaimed without doing it (the default) (default true)
+      --grace duration                 how long a blob must have been unreferenced before its bytes may be freed (default 168h0m0s)
+      --honour-releases[=true|false]   reclaim the last copy of released vault blobs after the grace window (default: on for the personal profile, off for media)
+      --json[=true|false]              emit machine-readable JSON
+      --temp-grace duration            how old a partial write must be before it is swept (default 24h0m0s)
 ```
 
 ### Options inherited from parent commands

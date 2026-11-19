@@ -39,8 +39,8 @@ heyarr vault purge [flags]
 ### Options
 
 ```
-      --json   emit machine-readable JSON
-      --yes    remove the pins; without it nothing is changed
+      --json[=true|false]   emit machine-readable JSON
+      --yes[=true|false]    remove the pins; without it nothing is changed
 ```
 
 ### Options inherited from parent commands

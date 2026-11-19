@@ -29,9 +29,9 @@ heyarr stores sync gog [flags]
 
 ```
       --addr string              where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --dry-run                  ask the node what it would do with each game — would want, already wanted or refused — and change nothing
+      --dry-run[=true|false]     ask the node what it would do with each game — would want, already wanted or refused — and change nothing
       --from-file string         read a saved 'lgogdownloader --list json' instead of running it
-      --json                     emit machine-readable JSON
+      --json[=true|false]        emit machine-readable JSON
       --quality-profile string   the profile each game is wanted under (defaults to the game default, owned)
       --timeout duration         how long one request may take; streaming reads and the event stream are exempt (default 30s)
       --token string             bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)

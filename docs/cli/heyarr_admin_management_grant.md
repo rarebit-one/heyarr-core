@@ -14,8 +14,8 @@ heyarr admin management grant <ed25519:device-key> [flags]
 ### Options
 
 ```
-      --json            emit machine-readable JSON
-      --reason string   why this device is authorised (required)
+      --json[=true|false]   emit machine-readable JSON
+      --reason string       why this device is authorised (required)
 ```
 
 ### Options inherited from parent commands

@@ -24,7 +24,7 @@ heyarr identity enrol [flags]
 ### Options
 
 ```
-      --json                emit machine-readable JSON
+      --json[=true|false]   emit machine-readable JSON
       --lifetime duration   how long the cert is valid (default: the 90-day enrolment lifetime)
 ```
 

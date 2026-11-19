@@ -26,10 +26,10 @@ heyarr device enrol [flags]
 ### Options
 
 ```
-      --json               emit machine-readable JSON
-      --name string        the name the peer records for this device (default: the device's own name)
-      --peer string        the peer to enrol at: its http(s):// URL (required)
-      --timeout duration   how long the request may take (default 30s)
+      --json[=true|false]   emit machine-readable JSON
+      --name string         the name the peer records for this device (default: the device's own name)
+      --peer string         the peer to enrol at: its http(s):// URL (required)
+      --timeout duration    how long the request may take (default 30s)
 ```
 
 ### Options inherited from parent commands

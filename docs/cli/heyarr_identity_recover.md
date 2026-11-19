@@ -36,8 +36,8 @@ heyarr identity recover [flags]
 ### Options
 
 ```
-      --force                    recover over an existing identity here — unrecoverable if it differs
-      --json                     emit machine-readable JSON
+      --force[=true|false]       recover over an existing identity here — unrecoverable if it differs
+      --json[=true|false]        emit machine-readable JSON
       --lifetime duration        how long the fresh device cert is valid (default: the 90-day enrolment lifetime)
       --name string              what to call the recovered identity (default: derived from this machine's hostname)
       --passphrase-file string   when an unusable sealed-file device is replaced, read the new passphrase from this file's first line (- for stdin) instead of the terminal; otherwise unused
