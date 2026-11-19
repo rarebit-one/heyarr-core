@@ -14,6 +14,11 @@ names the recipients to revoke but does not itself trigger the rotation, which
 the owner's device runs and the CLI still refuses for non-playlist spaces
 (#698, #706). The record does not yet replicate (ADR-0101 path); an owned space
 from before this record is gated from its first membership change on.
+**Note (2026-11-20):** a member's *own* newly enrolled device is given the
+key by one of that member's devices that holds it, through `space wrap` and
+`GET /spaces/{id}/own-devices` (ADR-0049's 2026-11-20 addendum), not by
+re-adding the member. The gate admits it as a current member's device; a
+removed member's device is still refused.
 **Milestone:** M9 — Encrypted personal state
 **Builds on:** [ADR-0049](0049-a-space-key-is-wrapped-for-a-device-encryption-key-and-a-peer-cannot-unwrap-it.md), [ADR-0095](0095-a-vault-is-a-filesystem-as-a-path-keyed-map-crdt.md), [ADR-0103](0103-a-space-key-has-epochs-and-a-rotation-seals-the-previous-key-under-the-next.md), [ADR-0104](0104-a-restricted-principal-reaches-only-the-spaces-a-device-granted-it.md)
 

@@ -1,0 +1,45 @@
+{
+  "space_id": "0199a0a0-0000-7000-8000-000000000049",
+  "key_epoch": 0,
+  "devices": [
+    {
+      "id": "d-bbbb1111",
+      "name": "bbbb1111",
+      "device_key": "ed25519:bbbb1111",
+      "recipient": "x25519:bbbb111111111111111111111111111111111111111111111111111111111111",
+      "status": "active",
+      "holds_current_key": true,
+      "this_device": true,
+      "enrolled_at": "2026-10-01T12:00:00Z"
+    },
+    {
+      "id": "d-bbbb2222",
+      "name": "bbbb2222",
+      "device_key": "ed25519:bbbb2222",
+      "recipient": "x25519:bbbb222222222222222222222222222222222222222222222222222222222222",
+      "status": "active",
+      "holds_current_key": false,
+      "this_device": false,
+      "enrolled_at": "2026-10-01T12:00:00Z"
+    },
+    {
+      "id": "d-old",
+      "name": "old phone",
+      "device_key": "ed25519:old",
+      "recipient": "x25519:dddd111111111111111111111111111111111111111111111111111111111111",
+      "status": "revoked",
+      "holds_current_key": false,
+      "this_device": false,
+      "enrolled_at": "2026-05-01T08:00:00Z"
+    },
+    {
+      "id": "d-v1",
+      "name": "v1 device",
+      "device_key": "ed25519:v1",
+      "status": "no_encryption_key",
+      "holds_current_key": false,
+      "this_device": false,
+      "enrolled_at": "2025-11-01T08:00:00Z"
+    }
+  ]
+}

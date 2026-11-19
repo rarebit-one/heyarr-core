@@ -80,6 +80,25 @@ Mnemosyne **does not** mount: the rest of the resource API, library/scanner/
 ingest, search, acquisition, the MCP surface, render, relay, DLNA, OPDS,
 Subsonic, pair relay or any provider integration.
 
+## Giving a new device its spaces (ADR-0049)
+
+Pairing and enrolling a new device admits it to the user's identity but wraps
+it no space key, so it lists the user's spaces and opens none of them. One of
+the user's devices that holds a space's key wraps it for the new one; the
+controller cannot, as it holds no key:
+
+```
+# On a device that holds the space, enrolled and write-authorised at the
+# controller the new device enrolled at:
+mnemosyne space wrap <space-id> --all-devices --dry-run   # which devices lack it
+mnemosyne space wrap <space-id> --all-devices             # or --device <device-id>
+```
+
+It wraps only for the caller's own user's devices that are enrolled, not
+revoked and carry an encryption key; it skips any that already hold the
+current key, so it is safe to run again. The copies replicate like any other
+wrapped key. Run it once per space.
+
 ## Sharing a space (ADR-0108)
 
 The space is the unit of sharing. Only the owner's device changes who a

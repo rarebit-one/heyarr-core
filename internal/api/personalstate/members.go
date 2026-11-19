@@ -49,6 +49,10 @@ type MemberResolver interface {
 	// the given user principals, keyed by recipient to the principal it speaks
 	// for.
 	DeviceWrapRecipients(ctx context.Context, principalIDs []string) (map[string]string, error)
+	// PrincipalDevices is every device enrolled for one user principal,
+	// revoked and keyless ones included — what GET /spaces/{id}/own-devices
+	// lists for a device wrapping the space key for its user's other devices.
+	PrincipalDevices(ctx context.Context, principalID string) ([]deviceauth.Device, error)
 }
 
 // The problem codes a membership refusal carries, so a device branches on the
