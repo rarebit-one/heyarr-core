@@ -25,7 +25,7 @@ heyarr admin user rekey <principal> <ed25519:public-key> [flags]
 ### Options
 
 ```
-      --json                  emit machine-readable JSON
+      --json[=true|false]     emit machine-readable JSON
       --recovery-key string   the identity's new x25519 recovery encryption PUBLIC key (x25519:<hex>; required)
 ```
 

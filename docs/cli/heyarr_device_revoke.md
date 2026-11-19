@@ -29,12 +29,12 @@ heyarr device revoke <device-key> [flags]
 ### Options
 
 ```
-      --addr string         where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --json                emit machine-readable JSON
-      --no-rotate           only tombstone the device; leave every space it could read wrapped for it
-      --timeout duration    how long one request may take; streaming reads and the event stream are exempt (default 30s)
-      --token string        bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
-      --token-file string   read the bearer token from this file (default: <data_dir>/cli.token when it exists)
+      --addr string              where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
+      --json[=true|false]        emit machine-readable JSON
+      --no-rotate[=true|false]   only tombstone the device; leave every space it could read wrapped for it
+      --timeout duration         how long one request may take; streaming reads and the event stream are exempt (default 30s)
+      --token string             bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
+      --token-file string        read the bearer token from this file (default: <data_dir>/cli.token when it exists)
 ```
 
 ### Options inherited from parent commands

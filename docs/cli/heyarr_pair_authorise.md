@@ -35,12 +35,12 @@ heyarr pair authorise [flags]
       --device-dir string     where this machine's device key lives (default: your config directory; VOID_WHICH_BINDS_DEVICE_DIR overrides)
       --identity-dir string   where your user identity lives (default: your config directory; VOID_WHICH_BINDS_IDENTITY_DIR overrides)
       --lifetime duration     how long an admission signed as the identity is valid (default: the enrolment lifetime)
-      --no-qr                 never draw the invite as a QR code
+      --no-qr[=true|false]    never draw the invite as a QR code
       --poll duration         how often to re-check the relay for the next handshake step (default 150ms)
-      --qr                    draw the invite as a QR code even when stdout is not a terminal (default: drawn only on a terminal)
+      --qr[=true|false]       draw the invite as a QR code even when stdout is not a terminal (default: drawn only on a terminal)
       --relay string          the running Heyarr's relay: a unix socket path, unix:///path, http://host:port or host:port
       --timeout duration      how long to wait for the whole handshake before giving up (default 2m0s)
-      --yes                   assume the codes matched, without prompting (use only when you compared them another way)
+      --yes[=true|false]      assume the codes matched, without prompting (use only when you compared them another way)
 ```
 
 ### Options inherited from parent commands

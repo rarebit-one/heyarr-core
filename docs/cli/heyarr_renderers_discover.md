@@ -23,9 +23,9 @@ heyarr renderers discover [flags]
 ### Options
 
 ```
-      --json               emit machine-readable JSON
-      --profile            also ask each renderer what it can play
-      --timeout duration   how long to listen for answers; devices may wait up to 3s before replying (default 5s)
+      --json[=true|false]      emit machine-readable JSON
+      --profile[=true|false]   also ask each renderer what it can play
+      --timeout duration       how long to listen for answers; devices may wait up to 3s before replying (default 5s)
 ```
 
 ### Options inherited from parent commands

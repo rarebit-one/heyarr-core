@@ -24,10 +24,10 @@ heyarr token create <name> [flags]
 ### Options
 
 ```
-      --executor         mint a restricted executor token: vault surface and granted spaces only (ADR-0104)
-      --expires string   expiry as a duration from now, e.g. 90d, 12h, 1y (default: never)
-      --json             emit machine-readable JSON
-      --scopes string    comma-separated scopes: read, write, admin (default "read")
+      --executor[=true|false]   mint a restricted executor token: vault surface and granted spaces only (ADR-0104)
+      --expires string          expiry as a duration from now, e.g. 90d, 12h, 1y (default: never)
+      --json[=true|false]       emit machine-readable JSON
+      --scopes string           comma-separated scopes: read, write, admin (default "read")
 ```
 
 ### Options inherited from parent commands

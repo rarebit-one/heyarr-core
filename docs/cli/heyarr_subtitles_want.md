@@ -27,8 +27,8 @@ heyarr subtitles want [flags]
 
 ```
       --addr string         where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --all                 every video on this node missing the subtitle
-      --json                emit machine-readable JSON
+      --all[=true|false]    every video on this node missing the subtitle
+      --json[=true|false]   emit machine-readable JSON
       --lang string         subtitle language as an ISO-639-1 code (default "en")
       --library string      only videos in this library id
       --timeout duration    how long one request may take; streaming reads and the event stream are exempt (default 30s)

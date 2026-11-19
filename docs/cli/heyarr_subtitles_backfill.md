@@ -31,8 +31,8 @@ heyarr subtitles backfill [flags]
 
 ```
       --addr string         where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --all                 every video on this node missing subtitles
-      --json                emit machine-readable JSON
+      --all[=true|false]    every video on this node missing subtitles
+      --json[=true|false]   emit machine-readable JSON
       --library string      only videos in this library id
       --timeout duration    how long one request may take; streaming reads and the event stream are exempt (default 30s)
       --token string        bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)

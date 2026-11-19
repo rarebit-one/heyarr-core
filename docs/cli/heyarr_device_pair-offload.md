@@ -30,7 +30,7 @@ heyarr device pair-offload [flags]
       --poll duration        how often to re-check the relay for the phone's next step (default 150ms)
       --relay string         the node's void-which-binds relay base the phone also reaches: unix:///path, http://host:port/pair, or host:port/pair
       --timeout duration     how long to wait for the whole pairing before giving up (default 2m0s)
-      --yes                  assume the codes matched, without prompting (use only when you compared them another way)
+      --yes[=true|false]     assume the codes matched, without prompting (use only when you compared them another way)
 ```
 
 ### Options inherited from parent commands

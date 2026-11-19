@@ -21,7 +21,7 @@ heyarr identity credential [flags]
 ### Options
 
 ```
-      --header   print the whole Authorization header line, not just the value
+      --header[=true|false]   print the whole Authorization header line, not just the value
 ```
 
 ### Options inherited from parent commands

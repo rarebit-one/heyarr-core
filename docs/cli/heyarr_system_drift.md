@@ -47,7 +47,7 @@ heyarr system drift [flags]
       --expected-commit string    the commit the instance should be built from (default: this binary's)
       --expected-schema int       the schema version its database should be at (default: the highest migration this binary embeds)
       --expected-version string   the version the instance should be running (default: this binary's)
-      --json                      emit machine-readable JSON
+      --json[=true|false]         emit machine-readable JSON
       --timeout duration          how long one request may take; streaming reads and the event stream are exempt (default 30s)
       --token string              bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
       --token-file string         read the bearer token from this file (default: <data_dir>/cli.token when it exists)

@@ -42,7 +42,7 @@ heyarr device gateway [flags]
       --device-password-file string   read the device password from this file (or set HEYARR_GATEWAY_PASSWORD)
       --device-user string            the username the stock app authenticates to this device with (default "heyarr")
       --history-space string          space id holding your play history, to serve getNowPlaying and getAlbumList2?type=recent|frequent (§46)
-      --json                          emit machine-readable JSON
+      --json[=true|false]             emit machine-readable JSON
       --listen string                 address to serve the gateway on (default "127.0.0.1:4040")
       --starred-space string          space id holding your starred set, to serve getStarred2 and getAlbumList2?type=starred (§46)
       --timeout duration              how long one request may take; streaming reads and the event stream are exempt (default 30s)

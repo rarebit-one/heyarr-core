@@ -10,7 +10,7 @@ heyarr desired list [flags]
 
 ```
       --addr string         where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --json                emit machine-readable JSON
+      --json[=true|false]   emit machine-readable JSON
       --limit int           stop after this many rows (default: every row, following pagination cursors)
       --monitor string      only monitored (true) or unmonitored (false) wants
       --scope string        only work-scoped or edition-scoped wants

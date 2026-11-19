@@ -38,7 +38,7 @@ heyarr quality-profile create <name> [flags]
       --addr string             where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
       --content-types strings   which content types this profile is for (e.g. movie,series); omitted means unrestricted
       --description string      a human description of what the profile is for
-      --json                    emit machine-readable JSON
+      --json[=true|false]       emit machine-readable JSON
       --prefer string           scoring rules as a JSON array — weighted preferences, never gates
       --terminal string         stop rules as a JSON array — when the upgrade workflow stops looking
       --timeout duration        how long one request may take; streaming reads and the event stream are exempt (default 30s)

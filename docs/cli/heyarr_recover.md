@@ -39,7 +39,7 @@ heyarr recover [flags]
       --from-key heyarr peers   the surviving peer's ed25519 public key (as heyarr peers shows it)
       --generation int          which backup generation to restore (0 = the latest the peer holds)
       --identity-key string     this node's identity key file, kept aside from the lost data directory
-      --json                    emit machine-readable JSON
+      --json[=true|false]       emit machine-readable JSON
 ```
 
 ### Options inherited from parent commands

@@ -68,7 +68,7 @@ heyarr space rewrap (--from <gen1.blob> --stage <dir> | --prove <dir> --stage-id
       --gen1-secret-file string   with --from: read the gen1 recovery secret or shares from this file ("-": standard input)
       --gen2-secret-file string   every mode: read the gen2 recovery secret or shares from this file ("-": standard input); it keys the stage MAC
       --identity-dir string       with --from: where your gen2 user identity lives; when one is there, its recovery key must be the gen2 secret's (default: your config directory; VOID_WHICH_BINDS_IDENTITY_DIR overrides)
-      --json                      emit machine-readable JSON
+      --json[=true|false]         emit machine-readable JSON
       --prove string              prove this stage directory (offline)
       --stage string              with --from: the stage directory to create (must not exist)
       --stage-id string           with --prove and --upload: the stage id --stage printed for this run; any other stage is refused

@@ -32,7 +32,7 @@ heyarr quality-profile set <name|id> [flags]
       --addr string             where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
       --content-types strings   replace which content types this profile is for (comma-separated; pass an empty value to clear back to unrestricted)
       --description string      replace the description
-      --json                    emit machine-readable JSON
+      --json[=true|false]       emit machine-readable JSON
       --name string             rename the profile
       --prefer string           replace scoring rules (JSON array; [] clears)
       --terminal string         replace stop rules (JSON array; [] clears)

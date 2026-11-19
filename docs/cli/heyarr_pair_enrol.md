@@ -28,7 +28,7 @@ heyarr pair enrol [flags]
       --poll duration                  how often to re-check the relay for the next handshake step (default 150ms)
       --relay string                   reach the relay at this address instead of the invite's (a unix socket path, unix:///path, http://host:port or host:port)
       --timeout duration               how long to wait for the whole handshake before giving up (default 2m0s)
-      --yes                            assume the codes matched, without prompting (use only when you compared them another way)
+      --yes[=true|false]               assume the codes matched, without prompting (use only when you compared them another way)
 ```
 
 ### Options inherited from parent commands

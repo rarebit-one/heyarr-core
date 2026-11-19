@@ -23,7 +23,7 @@ heyarr identity verify-recovery [flags]
 ### Options
 
 ```
-      --json                 emit machine-readable JSON
+      --json[=true|false]    emit machine-readable JSON
       --secret string        the recovery secret (prefer --secret-file or a pipe: a secret in argv is visible in ps)
       --secret-file string   read the recovery secret (or shares, one per line) from this file
 ```

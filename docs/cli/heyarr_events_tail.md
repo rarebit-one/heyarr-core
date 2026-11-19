@@ -26,15 +26,15 @@ heyarr events tail [flags]
 ### Options
 
 ```
-      --addr string         where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
-      --after int           resume after this sequence number
-      --json                emit machine-readable JSON
-  -n, --limit int           stop after this many events (default: follow forever)
-      --reconnect           reopen the stream after a gap notice or a dropped connection (default true)
-      --timeout duration    how long one request may take; streaming reads and the event stream are exempt (default 30s)
-      --token string        bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
-      --token-file string   read the bearer token from this file (default: <data_dir>/cli.token when it exists)
-      --types strings       only these event types; accepts trailing-* prefixes
+      --addr string              where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
+      --after int                resume after this sequence number
+      --json[=true|false]        emit machine-readable JSON
+  -n, --limit int                stop after this many events (default: follow forever)
+      --reconnect[=true|false]   reopen the stream after a gap notice or a dropped connection (default true)
+      --timeout duration         how long one request may take; streaming reads and the event stream are exempt (default 30s)
+      --token string             bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
+      --token-file string        read the bearer token from this file (default: <data_dir>/cli.token when it exists)
+      --types strings            only these event types; accepts trailing-* prefixes
 ```
 
 ### Options inherited from parent commands

@@ -30,7 +30,7 @@ heyarr space export-recovery --out <file> [flags]
 
 ```
       --identity-dir string   where your user identity lives (default: your config directory; VOID_WHICH_BINDS_IDENTITY_DIR overrides)
-      --json                  emit machine-readable JSON
+      --json[=true|false]     emit machine-readable JSON
       --out string            write the recovery blob to this file (required)
       --recipient string      the recovery key to export for (x25519:<hex>); default: your user identity's
 ```

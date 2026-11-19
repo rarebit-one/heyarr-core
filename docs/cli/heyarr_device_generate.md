@@ -39,8 +39,8 @@ heyarr device generate [flags]
 
 ```
       --custody string           where the private keys are held: software (seed files) or sealedfile (a passphrase-sealed file) (default "software")
-      --force                    replace an existing key — unrecoverable
-      --json                     emit machine-readable JSON
+      --force[=true|false]       replace an existing key — unrecoverable
+      --json[=true|false]        emit machine-readable JSON
       --name string              what to call this device (default: this machine's hostname)
       --passphrase-file string   with --custody sealedfile, read the passphrase from this file's first line (- for stdin) instead of the terminal
 ```

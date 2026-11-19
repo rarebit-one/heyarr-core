@@ -9,7 +9,7 @@ heyarr version [flags]
 ### Options
 
 ```
-      --json   emit machine-readable JSON
+      --json[=true|false]   emit machine-readable JSON
 ```
 
 ### Options inherited from parent commands

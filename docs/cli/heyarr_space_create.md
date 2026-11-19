@@ -26,11 +26,11 @@ heyarr space create [flags]
 ```
       --addr string             where the API is: a unix socket path, unix:///path, http://host:port or host:port (default: the unix socket in the data directory)
       --identity-dir string     where your user identity lives (default: your config directory; VOID_WHICH_BINDS_IDENTITY_DIR overrides)
-      --json                    emit machine-readable JSON
+      --json[=true|false]       emit machine-readable JSON
       --kind string             space kind: personal, family, shared, or research (default "personal")
       --recipient stringArray   an authorised device's encryption key (x25519:<hex>); repeatable
-      --recovery                also wrap the key for your user identity's recovery key, so it survives losing every device (#360) (default true)
-      --self                    also wrap the key for this device, so it can read the space (default true)
+      --recovery[=true|false]   also wrap the key for your user identity's recovery key, so it survives losing every device (#360) (default true)
+      --self[=true|false]       also wrap the key for this device, so it can read the space (default true)
       --timeout duration        how long one request may take; streaming reads and the event stream are exempt (default 30s)
       --token string            bearer token (prefer HEYARR_TOKEN: a token in argv is visible in ps and shell history)
       --token-file string       read the bearer token from this file (default: <data_dir>/cli.token when it exists)

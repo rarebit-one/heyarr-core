@@ -24,7 +24,7 @@ heyarr recipient init --sealed <path> [flags]
 ### Options
 
 ```
-      --json                    emit machine-readable JSON
+      --json[=true|false]       emit machine-readable JSON
       --pin-credential string   the systemd credential name the PIN is delivered under (default "heyarr-recipient-pin")
       --pin-file string         an owner-only file holding the PIN (default: the systemd credential)
       --sealed string           where to write the sealed key file (required)

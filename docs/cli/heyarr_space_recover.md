@@ -44,11 +44,11 @@ heyarr space recover [flags]
 ### Options
 
 ```
-      --from-blob string     take the wrapped copies from this exported recovery blob instead of the control database
-      --json                 emit machine-readable JSON
-      --rewrap               also re-seal the recovered keys for THIS machine's device so it keeps reading the spaces (writes the control DB; run with the controller stopped)
-      --secret string        the recovery secret (prefer --secret-file or stdin; argv is visible in ps)
-      --secret-file string   read the recovery secret from this file
+      --from-blob string      take the wrapped copies from this exported recovery blob instead of the control database
+      --json[=true|false]     emit machine-readable JSON
+      --rewrap[=true|false]   also re-seal the recovered keys for THIS machine's device so it keeps reading the spaces (writes the control DB; run with the controller stopped)
+      --secret string         the recovery secret (prefer --secret-file or stdin; argv is visible in ps)
+      --secret-file string    read the recovery secret from this file
 ```
 
 ### Options inherited from parent commands

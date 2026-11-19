@@ -15,8 +15,8 @@ heyarr recipient show --sealed <path> [flags]
 ### Options
 
 ```
-      --json            emit machine-readable JSON
-      --sealed string   the sealed key file (required)
+      --json[=true|false]   emit machine-readable JSON
+      --sealed string       the sealed key file (required)
 ```
 
 ### Options inherited from parent commands
