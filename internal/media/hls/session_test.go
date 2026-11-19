@@ -539,12 +539,19 @@ func TestASessionReopenedDuringItsCleanupKeepsItsCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A request starts a run, then the player goes away. The run is still
+	// going, and nothing is waiting on the session.
+	ctx, cancel := context.WithCancel(t.Context())
 	initDone := make(chan error, 1)
 	go func() {
-		_, err := old.Init(t.Context())
+		_, err := old.Init(ctx)
 		initDone <- err
 	}()
 	<-run.started
+	cancel()
+	if err := <-initDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the abandoned init ended with %v", err)
+	}
 
 	// The session goes idle and is forgotten; its cleanup waits on the run.
 	swept := make(chan struct{})
@@ -552,11 +559,9 @@ func TestASessionReopenedDuringItsCleanupKeepsItsCache(t *testing.T) {
 		m.Sweep(clk.advance(hls.DefaultSessionIdle))
 		close(swept)
 	}()
-	// The waiting request sees the session end only once Sweep has let go of
-	// it, so the id is free from here on.
-	if err := <-initDone; err == nil {
-		t.Fatal("init succeeded on a session that ended")
-	}
+	// Sweep stops the run in the same step that forgets the session, so once
+	// the run reads as stopped the id is free.
+	await(t, old, func() bool { return old.Position() == -1 }, "the sweep to forget the session")
 
 	again, err := m.Open(t.Context(), "resumed", src)
 	if err != nil {
@@ -647,5 +652,73 @@ func TestASourceWithNoPictureCannotBePlanned(t *testing.T) {
 	defer cancel()
 	if _, err := index.Timing(ctx, "song", src, true); !errors.Is(err, hls.ErrNoPlan) {
 		t.Errorf("timing a source with no picture for a copy = %v, want ErrNoPlan", err)
+	}
+}
+
+// stalled is a Runner that writes nothing until its run is stopped: a segment
+// slower to make than the idle limit.
+type stalled struct{ started chan struct{} }
+
+func (r *stalled) Stream(ctx context.Context, _ ffmpeg.StreamSpec, _ io.Writer) error {
+	r.started <- struct{}{}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A request still waiting for its segment keeps the run that is making it,
+// past the idle limit and past the session's. Once the request is answered
+// or abandoned, the idle clock starts from then.
+func TestARunWithARequestWaitingIsNotIdle(t *testing.T) {
+	clk := &clock{now: time.Unix(1_800_000_000, 0)}
+	run := &stalled{started: make(chan struct{}, 4)}
+	m, err := hls.New(hls.Options{
+		Root: filepath.Join(t.TempDir(), "hls"), Runner: run, Now: clk.Now,
+		Index: fixedTiming{t: hls.Timing{Duration: 60, Keyframes: []float64{0, 6, 12, 18, 24, 30, 36, 42, 48, 54}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m.Close)
+	s, err := m.Open(t.Context(), "slow", hls.Source{Blob: "blob", Spec: ffmpeg.StreamSpec{Source: "film.mkv", CopyVideo: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	answered := make(chan error, 1)
+	go func() {
+		_, err := s.Segment(ctx, 0)
+		answered <- err
+	}()
+	<-run.started
+
+	m.Sweep(clk.advance(hls.DefaultProducerIdle))
+	if s.Position() != 0 {
+		t.Fatalf("a run making a segment a request is waiting for was stopped as idle (position %d)", s.Position())
+	}
+	m.Sweep(clk.advance(hls.DefaultSessionIdle))
+	if s.Position() != 0 {
+		t.Fatalf("a session with a request waiting was ended as idle (position %d)", s.Position())
+	}
+	select {
+	case err := <-answered:
+		t.Fatalf("the waiting request was answered by a sweep: %v", err)
+	default:
+	}
+
+	// The player gives up. Nothing is waiting now, and idleness counts from
+	// when it stopped waiting, not from when it asked.
+	cancel()
+	if err := <-answered; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the abandoned request ended with %v", err)
+	}
+	m.Sweep(clk.advance(hls.DefaultProducerIdle - time.Second))
+	if s.Position() != 0 {
+		t.Fatalf("the run was stopped %v after its last request ended, before the idle limit", hls.DefaultProducerIdle-time.Second)
+	}
+	m.Sweep(clk.advance(time.Second))
+	if s.Position() != -1 {
+		t.Errorf("the run is still going (position %d) a full idle limit after its last request", s.Position())
 	}
 }

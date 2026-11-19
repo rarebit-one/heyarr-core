@@ -230,11 +230,20 @@ func (m *Manager) Active() int {
 
 // Sweep stops production nobody is consuming and forgets sessions nobody has
 // touched. Run calls it on a tick; tests call it with the clock they set.
+//
+// A session with a request still waiting is not idle, however long ago that
+// request arrived: a segment that takes longer than the idle limit to make (a
+// software re-encode, a tone-map, a stalled disk) is being consumed, and
+// stopping its run would only make the request start it again.
 func (m *Manager) Sweep(now time.Time) {
 	m.mu.Lock()
 	var ended []*Session
 	for id, s := range m.sessions {
 		s.mu.Lock()
+		if s.waiting > 0 {
+			s.mu.Unlock()
+			continue
+		}
 		idle := now.Sub(s.lastUse)
 		if s.prod != nil && !s.prod.cancelled && idle >= m.producerIdle {
 			m.log.Info("hls run stopped: nobody is asking", "session", id, "idle", idle)
@@ -314,6 +323,9 @@ type Session struct {
 	// measured from it.
 	want    int
 	lastUse time.Time
+	// waiting counts requests blocked on this session; Sweep leaves a
+	// session with any alone.
+	waiting int
 	prod    *producer
 	gen     int
 	closed  bool
@@ -380,6 +392,21 @@ func (s *Session) touch() {
 	s.mu.Unlock()
 }
 
+// hold marks a request as waiting on the session until release, which also
+// starts the idle clock again from the moment the request is answered.
+func (s *Session) hold() {
+	s.mu.Lock()
+	s.waiting++
+	s.mu.Unlock()
+}
+
+func (s *Session) release() {
+	s.mu.Lock()
+	s.waiting--
+	s.lastUse = s.m.now()
+	s.mu.Unlock()
+}
+
 func (s *Session) broadcastLocked() {
 	close(s.changed)
 	s.changed = make(chan struct{})
@@ -387,6 +414,8 @@ func (s *Session) broadcastLocked() {
 
 // Init returns the init segment, starting production if nothing has made it.
 func (s *Session) Init(ctx context.Context) ([]byte, error) {
+	s.hold()
+	defer s.release()
 	var waited *producer
 	for {
 		s.mu.Lock()
@@ -425,6 +454,8 @@ func (s *Session) Segment(ctx context.Context, k int) (*os.File, error) {
 	if k < 0 || k >= len(s.segs) {
 		return nil, ErrNoSegment
 	}
+	s.hold()
+	defer s.release()
 	var waited *producer
 	for {
 		s.mu.Lock()
