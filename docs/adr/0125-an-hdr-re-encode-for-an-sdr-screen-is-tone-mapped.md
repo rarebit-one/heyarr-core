@@ -1,6 +1,6 @@
 # 0125. An HDR re-encode for an SDR screen is tone-mapped, and one that cannot be is refused
 
-**Status:** Proposed
+**Status:** Accepted (2026-11-19)
 **Date:** 2026-11-18
 **Builds on:** ADR-0069 (the on-the-fly repackage), ADR-0123 (copy selection), ADR-0023 (the toolchain is optional)
 **Refs:** #886, #885, §33, §68
