@@ -1393,6 +1393,70 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/v1/spaces/{id}/own-devices:
+    get:
+      tags: [personal-state]
+      operationId: listSpaceOwnDevices
+      summary: Which of the caller's own devices hold a space's current key (ADR-0049). Device credential only; refused to a restricted credential and a Guest.
+      description: |
+        Pairing or enrolling a new device admits it to its user's identity
+        but wraps it no space key, and the server cannot wrap one: it holds
+        no key to wrap with (Invariant 6). A device that holds the key reads
+        this list, wraps the current key for each `active` device whose
+        `holds_current_key` is false, and pushes the copies with
+        `POST /spaces/{id}/keys`, where enrol-before-wrap and the space's
+        membership gate decide as for any other copy. `mnemosyne space wrap`
+        is that client.
+
+        Every device enrolled for the caller's user principal is listed,
+        newest first, under each user identity the principal has held —
+        revoked devices and devices with no encryption key included, with a
+        `status` saying why they are not wrap targets. Only a Device
+        credential has a user and a device to list for: a bearer token or a
+        session is a `403`. An unknown space is a `404`; a node that resolves
+        no user identities answers `503`.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The space's current key epoch and the caller's devices.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [space_id, key_epoch, devices]
+                properties:
+                  space_id: { type: string }
+                  key_epoch:
+                    type: integer
+                    minimum: 0
+                    description: The space's current key epoch, which a wrap for a device lacking a copy must seal.
+                  devices:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, device_key, status, holds_current_key, this_device, enrolled_at]
+                      properties:
+                        id: { type: string, description: The device identity's id. }
+                        name: { type: string }
+                        device_key: { type: string, description: "`ed25519:<hex>`" }
+                        recipient:
+                          type: string
+                          description: The device's encryption key (`x25519:<hex>`), the key a space key is wrapped for; absent for a device with none.
+                        status:
+                          type: string
+                          enum: [active, revoked, no_encryption_key]
+                          description: "`active` is a wrap target; a revoked device is refused by enrol-before-wrap; a device with no encryption key has nothing to wrap for."
+                        holds_current_key:
+                          type: boolean
+                          description: A copy of the space's current key is wrapped for `recipient`.
+                        this_device: { type: boolean, description: The caller's own device. }
+                        enrolled_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503":
+          description: This node resolves no user identities.
+
   /api/v1/service-recipients:
     get:
       tags: [personal-state]

@@ -591,6 +591,31 @@ func (s *Store) DeviceWrapRecipients(ctx context.Context, principalIDs []string)
 	return out, rows.Err()
 }
 
+// PrincipalDevices is every device enrolled for the user principal
+// principalID, newest first, under each user identity the principal has held
+// (a re-keyed user keeps the devices its earlier key admitted). Revoked
+// devices and devices with no encryption key are included, so a caller can say
+// why one is not a wrap target. An unknown principal has none.
+func (s *Store) PrincipalDevices(ctx context.Context, principalID string) ([]Device, error) {
+	rows, err := s.reader.QueryContext(ctx,
+		`SELECT d.id, d.user_id, d.device_key, d.encryption_key, d.name, d.cert, d.enrolled_at, d.expires_at, d.revoked_at
+		 FROM device_identities d JOIN user_identities u ON u.id = d.user_id
+		 WHERE u.principal_id = ? ORDER BY d.enrolled_at DESC, d.id DESC`, principalID)
+	if err != nil {
+		return nil, fmt.Errorf("deviceauth: listing a principal's devices: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []Device{}
+	for rows.Next() {
+		d, err := scanDevice(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // RecoveryWrapRecipients is the set of users' recovery encryption keys, rendered
 // "x25519:<hex>" — the wrap recipients a space-key rotation may not drop
 // (ADR-0022, ADR-0103). It is the recovery half of AllowedWrapRecipients.

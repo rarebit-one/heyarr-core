@@ -147,3 +147,16 @@ func TestMnemosyneCarriesSpaceMembers(t *testing.T) {
 		}
 	}
 }
+
+// TestMnemosyneCarriesSpaceWrap: `space wrap`, which gives a newly paired
+// device of the same user the keys of the spaces it lacks (ADR-0049), is
+// mounted under the mnemosyne root, where those spaces live.
+func TestMnemosyneCarriesSpaceWrap(t *testing.T) {
+	out, stderr, err := runMnemosyneCmd(t, context.Background(), "space", "--help")
+	if err != nil {
+		t.Fatalf("space --help: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(out, "\n  wrap ") {
+		t.Errorf("mnemosyne space lacks wrap:\n%s", out)
+	}
+}

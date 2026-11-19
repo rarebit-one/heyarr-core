@@ -46,3 +46,4 @@ it.
 * [heyarr space rewrap](heyarr_space_rewrap.md)	 - Rewrap every space key from the gen1 recovery blob to gen2 (void-which-binds ADR-0022 cutover)
 * [heyarr space rotate](heyarr_space_rotate.md)	 - Revoke recipients from a space by rotating its key (§41, #361)
 * [heyarr space snapshot](heyarr_space_snapshot.md)	 - Take an encrypted snapshot at the current causal point (§44)
+* [heyarr space wrap](heyarr_space_wrap.md)	 - Wrap a space's key for another of your own enrolled devices (ADR-0049)

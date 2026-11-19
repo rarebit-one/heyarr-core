@@ -1,0 +1,13 @@
+{
+  "space_id": "<space>",
+  "key_epoch": 0,
+  "dry_run": false,
+  "wrapped": [
+    {
+      "id": "<phone>",
+      "name": "alice-phone",
+      "recipient": "<phone-key>"
+    }
+  ],
+  "already_held": []
+}

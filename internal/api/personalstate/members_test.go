@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ const (
 type fakeMembers struct {
 	users   map[string]deviceauth.User // by principal id and by name
 	devices map[string]string          // recipient -> principal id
+	extra   map[string][]deviceauth.Device
 }
 
 func (f fakeMembers) ResolveUser(_ context.Context, ref string) (deviceauth.User, error) {
@@ -52,6 +54,23 @@ func (f fakeMembers) DeviceWrapRecipients(_ context.Context, ids []string) (map[
 			}
 		}
 	}
+	return out, nil
+}
+
+// PrincipalDevices answers each of the principal's enrolled keys as an active
+// device named for its key, plus any listed extra devices of theirs.
+func (f fakeMembers) PrincipalDevices(_ context.Context, principal string) ([]deviceauth.Device, error) {
+	out := []deviceauth.Device{}
+	for recipient, p := range f.devices {
+		if p == principal {
+			out = append(out, deviceauth.Device{
+				ID: "d-" + recipient[7:15], Name: recipient[7:15], DeviceKey: "ed25519:" + recipient[7:15], EncryptionKey: recipient,
+				EnrolledAt: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
+			})
+		}
+	}
+	out = append(out, f.extra[principal]...)
+	slices.SortFunc(out, func(a, b deviceauth.Device) int { return strings.Compare(a.ID, b.ID) })
 	return out, nil
 }
 

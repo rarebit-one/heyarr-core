@@ -66,6 +66,7 @@ it.`,
 		newSpaceGrantCommand(opts, configPath, &deviceDir),
 		newSpaceRevokeExecutorCommand(opts, configPath, &deviceDir),
 		newSpaceMembersCommand(opts, configPath, &deviceDir),
+		newSpaceWrapCommand(opts, configPath, &deviceDir),
 	)
 	return cmd
 }

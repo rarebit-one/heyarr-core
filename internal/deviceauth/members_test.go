@@ -95,4 +95,25 @@ func TestResolveUserAndDeviceWrapRecipients(t *testing.T) {
 	if err != nil || len(none) != 0 {
 		t.Errorf("no principals = %v, %v", none, err)
 	}
+
+	// PrincipalDevices lists every one of alice's devices, revoked and keyless
+	// included, and none of bob's.
+	devices, err := f.store.PrincipalDevices(ctx, ua.PrincipalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]deviceauth.Device{}
+	for _, d := range devices {
+		if d.UserID != ua.ID {
+			t.Errorf("alice's devices include %+v, another user's", d)
+		}
+		byName[d.Name] = d
+	}
+	if len(devices) != 3 || byName["phone"].EncryptionKey != encKeyA || byName["old laptop"].RevokedAt == nil ||
+		byName["v1 device"].EncryptionKey != "" {
+		t.Errorf("alice's devices = %+v", devices)
+	}
+	if nobody, err := f.store.PrincipalDevices(ctx, "p-nobody"); err != nil || len(nobody) != 0 {
+		t.Errorf("an unknown principal's devices = %v, %v", nobody, err)
+	}
 }

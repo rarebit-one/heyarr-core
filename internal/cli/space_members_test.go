@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 type householdUser struct {
 	name, principal, encKey, dir string
 	store                        *device.Store
+	userPriv                     ed25519.PrivateKey
 }
 
 // enrolUser pins a fresh user identity on the harness and enrols one software
@@ -66,7 +68,7 @@ func (h *apiHarness) enrolUser(t *testing.T, name string) householdUser {
 	if _, err := h.identities.EnrolDevice(ctx, cert, name+"-laptop"); err != nil {
 		t.Fatal(err)
 	}
-	return householdUser{name: name, principal: u.PrincipalID, encKey: dev.EncryptionKeyString(), dir: dir, store: ds}
+	return householdUser{name: name, principal: u.PrincipalID, encKey: dev.EncryptionKeyString(), dir: dir, store: ds, userPriv: userPriv}
 }
 
 // TestSpaceMembersShareAndUnshare drives `space members add|list|remove` through

@@ -275,6 +275,11 @@ func (a *API) Mount(r chi.Router) {
 	r.With(httpapi.RefuseGuest, httpapi.RefuseRestricted).Get("/spaces/{id}/members", a.listMembers)
 	write.With(httpapi.RefuseRestricted).Post("/spaces/{id}/members", a.addMember)
 	write.With(httpapi.RefuseRestricted).Delete("/spaces/{id}/members/{member}", a.removeMember)
+	// Which of the caller's own devices hold the space's current key: a read,
+	// for a Device credential only, so a device can wrap the key for its user's
+	// newly enrolled devices (owndevices.go). Closed to a Guest and an executor,
+	// which has no user and no devices.
+	r.With(httpapi.RefuseGuest, httpapi.RefuseRestricted).Get("/spaces/{id}/own-devices", a.listOwnDevices)
 	// Registering an executor's public key as a service recipient (ADR-0104)
 	// pins it as a wrap target, so it is consent too: `write`, from a Device
 	// credential only. Listing them is a read, closed to an executor (which
