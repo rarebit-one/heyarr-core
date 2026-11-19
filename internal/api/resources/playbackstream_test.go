@@ -126,6 +126,8 @@ type clientPlan struct {
 	Mode     string `json:"mode"`
 	URL      string `json:"url"`
 	MIME     string `json:"mime"`
+	HLSURL   string `json:"hls_url"`
+	HLSMIME  string `json:"hls_mime"`
 	Reason   string `json:"reason"`
 	Source   *struct {
 		Container   string `json:"container"`

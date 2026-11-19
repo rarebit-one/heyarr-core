@@ -84,6 +84,42 @@ func TestStreamArgsAreTheContract(t *testing.T) {
 			want:    []string{"-c:v libx264"},
 			wantNot: []string{"-vf"},
 		},
+		{
+			name: "an HLS run of a copied picture keeps the source's clock (ADR-0126)",
+			spec: ffmpeg.StreamSpec{
+				Source: "/srv/x.mkv", CopyVideo: true, Start: 99,
+				Segmented: &ffmpeg.Segmented{From: 1210.5, SeekPast: 0.25},
+			},
+			want: []string{
+				"-noaccurate_seek -ss 1210.750000 -seek_timestamp 1 -copyts -i /srv/x.mkv",
+				"-c:v copy", "-c:a aac",
+				"-avoid_negative_ts disabled -output_ts_offset 10.000000",
+				"-use_editlist 0 -map_metadata -1 -map_chapters -1 -video_track_timescale 90000",
+				"-movflags frag_keyframe+empty_moov+default_base_moof+delay_moov+frag_discont -f mp4 -",
+			},
+			wantNot: []string{"-frag_duration", "-force_key_frames", "-ss 99"},
+		},
+		{
+			name:    "an HLS run from the first segment does not seek",
+			spec:    ffmpeg.StreamSpec{Source: "/srv/x.mkv", CopyVideo: true, Segmented: &ffmpeg.Segmented{}},
+			want:    []string{"-noaccurate_seek -copyts -i /srv/x.mkv"},
+			wantNot: []string{"-ss"},
+		},
+		{
+			name: "an HLS re-encode forces a keyframe at every boundary and offsets its clock",
+			spec: ffmpeg.StreamSpec{
+				Source: "/srv/x.mkv", MaxHeight: 720,
+				Segmented: &ffmpeg.Segmented{From: 600, KeyframeSeconds: 6},
+			},
+			want: []string{
+				"-ss 600.000000 -i /srv/x.mkv",
+				"-force_key_frames expr:gte(t,n_forced*6)",
+				"-vf scale=-2:'min(720,ih)'",
+				"-output_ts_offset 610.000000",
+				"+frag_discont",
+			},
+			wantNot: []string{"-copyts", "-noaccurate_seek", "-seek_timestamp", "-frag_duration"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

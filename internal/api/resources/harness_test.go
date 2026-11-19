@@ -121,6 +121,13 @@ type harnessConfig struct {
 	catalogSyncTrigger resources.CatalogSyncTrigger
 	// sites is the SiteMap passed to the API (ADR-0111). Zero value = single-site.
 	sites config.SiteMap
+	// hls presents stream plans as HLS (ADR-0126). Nil is a node that cannot.
+	hls resources.HLSPresenter
+}
+
+// withHLS wires the HLS presenter into the harness.
+func withHLS(p resources.HLSPresenter) harnessOption {
+	return func(hc *harnessConfig) { hc.hls = p }
 }
 
 // withCatalogSyncTrigger wires the on-demand catalog-sync trigger behind
@@ -278,6 +285,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		Streamer:        hc.streamer,
 		Blobs:           hc.blobs,
 		Prober:          hc.prober,
+		HLS:             hc.hls,
 		AudioLanguages:  hc.cfg.Media.AudioLanguages,
 		Sites:           hc.sites,
 		SsdpSearchAddr:  hc.cfg.Renderers.SsdpSearchAddr,
@@ -329,7 +337,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		// fixedTime verifies at fixedTime rather than at the wall clock.
 		Now:         clock.Now,
 		Mount:       []httpapi.MountFunc{api.Mount},
-		MountPublic: []httpapi.MountFunc{enrolHandler.Mount},
+		MountPublic: []httpapi.MountFunc{enrolHandler.Mount, api.MountHLS},
 	})
 	if err != nil {
 		t.Fatal(err)

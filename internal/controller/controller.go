@@ -47,6 +47,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/leases"
 	"github.com/rarebit-one/heyarr-core/internal/media"
 	"github.com/rarebit-one/heyarr-core/internal/media/ffmpeg"
+	"github.com/rarebit-one/heyarr-core/internal/media/hls"
 	"github.com/rarebit-one/heyarr-core/internal/media/probe"
 	"github.com/rarebit-one/heyarr-core/internal/peer/catalogsync"
 	"github.com/rarebit-one/heyarr-core/internal/peer/health"
@@ -687,6 +688,20 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 		}
 	}
 	legs := streamLegs{streamer: streamer, prober: prober}
+	// The seekable presentation of the same repackage (ADR-0126) needs both
+	// arms — ffmpeg to make segments, ffprobe to find where to cut — and a
+	// directory to keep the segments a player has not fetched yet.
+	if streamer != nil && toolchain.FFprobe.Available && c.cfg.Media.HLSCacheDir != "" {
+		index, err := hls.NewIndexer(toolchain.FFprobe.Path, c.log)
+		if err != nil {
+			return nil, nil, fmt.Errorf("controller: %w", err)
+		}
+		legs.hls, err = hls.New(hls.Options{Root: c.cfg.Media.HLSCacheDir, Runner: streamer, Index: index, Logger: c.log})
+		if err != nil {
+			return nil, nil, fmt.Errorf("controller: %w", err)
+		}
+		go legs.hls.Run(ctx, hlsSweepInterval)
+	}
 
 	mounts, publicMounts, err := c.mounts(ctx, mountDeps{
 		db: db, tokens: store, verifier: verifier, blobStore: blobStore, eventLog: eventLog,
@@ -880,7 +895,13 @@ func (c *Controller) newServer(ctx context.Context, db *sqlite.DB, blobStore cas
 type streamLegs struct {
 	streamer *ffmpeg.Streamer
 	prober   *probe.Prober
+	hls      *hls.Manager
 }
+
+// hlsSweepInterval is how often idle HLS runs and sessions are looked for.
+// Well inside hls.DefaultProducerIdle, so a paused player's slot comes back
+// within seconds of the idle limit rather than a whole interval after it.
+const hlsSweepInterval = 10 * time.Second
 
 // casBlobLocator hands the resource API a blob's local path (ADR-0069). The
 // same shape the worker's remux store has, kept here rather than imported from
@@ -1007,7 +1028,10 @@ func (c *Controller) mounts(ctx context.Context, d mountDeps) (apiMounts, public
 	// too, for heyarr's own media state (playlists, starred, history, reading
 	// position).
 	apiMounts = append([]httpapi.MountFunc{api.Mount, blobHandler.Mount}, mcpServer.Mount, psAPI.Mount)
-	publicMounts = append(renderMounts, compatMounts...)
+	// The HLS presentation (ADR-0126) is the second capability-addressed
+	// route: a Cast receiver fetches it with no credential, as a television
+	// fetches the render route.
+	publicMounts = append(append(renderMounts, api.MountHLS), compatMounts...)
 	return apiMounts, publicMounts, nil
 }
 
@@ -1111,6 +1135,9 @@ func (c *Controller) resourceAPI(ctx context.Context, d mountDeps, queue *jobs.Q
 	}
 	if d.legs.prober != nil {
 		apiOpts.Prober = d.legs.prober
+	}
+	if d.legs.hls != nil {
+		apiOpts.HLS = d.legs.hls
 	}
 	api, err := resources.New(apiOpts)
 	if err != nil {

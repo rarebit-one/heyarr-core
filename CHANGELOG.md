@@ -10,6 +10,19 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **A stream plan is also a seekable HLS presentation** (#908, ADR-0126).
+  Beside `url`, a `mode: stream` plan now carries `hls_url`
+  (`/render/hls/{capability}/index.m3u8`, `hls_mime`
+  `application/vnd.apple.mpegurl`): a VOD playlist of the whole film in fMP4
+  segments, so a Cast receiver, AVPlayer, Media3 or mpv shows the real length
+  and seeks natively, from the sender or the TV remote. Boundaries are fixed
+  up front (the source's keyframes for a copied picture, every 6 s with forced
+  keyframes for a re-encode), and segments are made on demand by one ffmpeg per
+  client, retargeted on a seek, a few segments ahead at most, stopped after
+  30 s idle. The routes take a capability in the path and no credential, with
+  CORS. They share `media.stream_concurrency` with the live stream, which is
+  unchanged. A source with no picture is offered the live stream alone. New
+  `media.hls_cache_dir`, default `<data_dir>/hls`.
 - **Candidates the profile scores equally are ranked by seeders** (#888).
   A tie used to fall to the candidate id, a hash, which picked arbitrarily
   among a dozen releases scoring the same. Torznab and Prowlarr results now

@@ -44,7 +44,16 @@ Each stream is one ffmpeg; one that re-encodes video is a core. Cap them:
 media:
   stream_concurrency: 2   # the default; a client past the cap gets 429 + Retry-After
   audio_languages: [en]   # optional preferred dialogue, with original-audio fallback
+  hls_cache_dir: /var/lib/heyarr/hls   # the default (<data_dir>/hls); segments awaiting a player
 ```
+
+A node with both ffmpeg and ffprobe also offers each stream plan as a seekable
+HLS presentation (`hls_url`, ADR-0126), fetched by a Cast receiver or a
+television without a credential under `/render/hls/`. Its segments live in
+`media.hls_cache_dir` only while a player is near them: a few per playing
+client, a few MB each at 1080p and tens of MB at 4K, cleared at start. Each
+playing client's production run takes one `stream_concurrency` slot, shared
+with the live stream.
 
 Clients can override `media.audio_languages` with `client.audio_languages` on
 `POST /playback/plan`. An explicit empty list selects original main audio.

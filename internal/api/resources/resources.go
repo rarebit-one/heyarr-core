@@ -152,6 +152,10 @@ type Options struct {
 	// so the answer is a finding rather than a guess. Optional.
 	Prober         PathProber
 	AudioLanguages []string
+	// HLS presents a `stream` plan as seekable HLS too (ADR-0126). Nil, the
+	// plan advertises no hls_url and MountHLS mounts nothing; the live stream
+	// is unaffected either way.
+	HLS HLSPresenter
 	// StreamHeartbeat is how often the SSE stream writes a keep-alive comment.
 	// Zero means the default.
 	StreamHeartbeat time.Duration
@@ -207,8 +211,12 @@ type API struct {
 
 	// streamKey signs stream tokens (ADR-0069); streamer, blobs and prober
 	// are the leg's arms. See playbackstream.go.
-	streamKey      []byte
-	streamer       PlaybackStreamer
+	streamKey []byte
+	streamer  PlaybackStreamer
+	// hlsKey signs HLS capabilities and hls presents them (ADR-0126); see
+	// playbackhls.go.
+	hlsKey         []byte
+	hls            HLSPresenter
 	blobs          BlobLocator
 	prober         PathProber
 	audioLanguages []string
@@ -329,6 +337,8 @@ func New(opts Options) (*API, error) {
 		renderPublicBaseURL: strings.TrimRight(opts.RenderPublicBaseURL, "/"),
 		selfPeerID:          opts.SelfPeerID,
 		streamKey:           streamKey(streamSecret),
+		hlsKey:              hlsKey(streamSecret),
+		hls:                 opts.HLS,
 		streamer:            opts.Streamer,
 		blobs:               opts.Blobs,
 		prober:              opts.Prober,
