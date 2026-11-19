@@ -1,6 +1,9 @@
 package identification
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // Real public release names (ADR-0026): a title asserts its own quality, so
 // these are the fixtures. Each recognised token and each deliberately
@@ -147,6 +150,81 @@ func TestReleaseSeasonContainsEpisode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.rel.ContainsEpisode(tc.season, tc.episode); got != tc.want {
 				t.Errorf("ContainsEpisode(%d,%d) = %v, want %v", tc.season, tc.episode, got, tc.want)
+			}
+		})
+	}
+}
+
+// Release names of the shapes indexers list (ADR-0026): the audio languages a
+// name spells out, read from its metadata run only (#888).
+func TestParseReleaseLanguages(t *testing.T) {
+	cases := []struct {
+		name  string
+		title string
+		want  []string
+	}{
+		{
+			name:  "a multi-audio name reads every language, in order",
+			title: "Some.Film.2023.1080p.WEB-DL.Org.Hindi.DDP.2.0.Eng-GRP",
+			want:  []string{"hi", "en"},
+		},
+		{
+			name:  "the reported shape, with spaces",
+			title: "Some Film 2023 1080p 60fps WEB-DL Org Hindi DDP 2.0 Eng",
+			want:  []string{"hi", "en"},
+		},
+		{
+			name:  "a bracketed language list",
+			title: "Some Film (2023) 1080p WEB-DL [Hindi + English] DDP5.1",
+			want:  []string{"hi", "en"},
+		},
+		{
+			name:  "three-letter codes in an episode name",
+			title: "Some.Show.S01E02.ITA.ENG.1080p.WEB-DL.x264-GRP",
+			want:  []string{"it", "en"},
+		},
+		{
+			name:  "a single dub",
+			title: "Some.Film.2019.FRENCH.1080p.BluRay.x264-GRP",
+			want:  []string{"fr"},
+		},
+		{
+			name:  "a repeated language is one member",
+			title: "Some.Film.2019.1080p.WEB-DL.English.DD5.1.Eng-GRP",
+			want:  []string{"en"},
+		},
+		{
+			name:  "a subtitle language is not an audio language",
+			title: "Some.Film.2019.Hindi.1080p.WEB-DL.x264.Eng.Subs-GRP",
+			want:  []string{"hi"},
+		},
+		{
+			name:  "a language word in the work's title is not read",
+			title: "The.French.Dispatch.2021.1080p.BluRay.x264-GRP",
+			want:  nil,
+		},
+		{
+			name:  "two-letter codes are never read",
+			title: "Some.Film.2019.1080p.WEB-DL.IT.DE.x264-GRP",
+			want:  nil,
+		},
+		{
+			name:  "multi names no language",
+			title: "Some.Film.2019.MULTi.1080p.BluRay.x264-GRP",
+			want:  nil,
+		},
+		{
+			name:  "an untagged name says nothing",
+			title: "Slow.Horses.S01E01.1080p.WEB-DL.DDP5.1.x265-GRP",
+			want:  nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ParseReleaseLanguages(tc.title)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("ParseReleaseLanguages(%q) = %v, want %v", tc.title, got, tc.want)
 			}
 		})
 	}

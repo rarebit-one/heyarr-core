@@ -1,6 +1,9 @@
 package identification
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // Release-name quality parsing, exposed for the indexer layer (ADR-0091).
 //
@@ -138,3 +141,99 @@ func ParseReleaseQuality(title string) ReleaseQuality {
 		DynamicRange: q.Dynamic,
 	}
 }
+
+// ParseReleaseLanguages reads the audio languages a release name spells out, as
+// ISO 639-1 codes in the order the name gives them, de-duplicated:
+// "Film.2023.1080p.WEB-DL.Org.Hindi.DDP.2.0.Eng-GRP" → hi, en (#888). Nil when
+// the name names none — an untagged name says nothing about its audio, and a
+// language preference then simply does not apply to it.
+//
+// Only the release-metadata run is read: the tokens from the first quality
+// token, year or season marker onwards, plus any bracketed tag. A word in the
+// work's own title ("The French Dispatch") is never a language. Only names and
+// three-letter codes count — a two-letter code is too often an ordinary word
+// ("it", "no", "de") or a flag ("hi" is hearing-impaired) to read as a claim.
+// A language followed by a subtitle word ("Eng.Subs") names the subtitles, not
+// the audio, and is skipped; "multi" and "dual" say there are several without
+// saying which, so they add nothing.
+func ParseReleaseLanguages(title string) []string {
+	toks := tokenize(title)
+	start := len(toks)
+	for i := 1; i < len(toks); i++ {
+		lower := strings.ToLower(toks[i])
+		_, isYear := parseYear(lower)
+		if isNoiseToken(lower) || isYear || reSeasonToken.MatchString(lower) {
+			start = i
+			break
+		}
+	}
+	meta := make([]string, 0, len(toks)-start)
+	for _, t := range toks[start:] {
+		meta = append(meta, strings.ToLower(t))
+	}
+	for _, b := range reBracketed.FindAllString(title, -1) {
+		meta = append(meta, "") // a bracket ends whatever the run was saying
+		for _, t := range tokenize(b[1 : len(b)-1]) {
+			meta = append(meta, strings.ToLower(t))
+		}
+	}
+
+	var out []string
+	seen := map[string]bool{}
+	for i, t := range meta {
+		code, ok := releaseLanguage(t)
+		if !ok || seen[code] {
+			continue
+		}
+		if i+1 < len(meta) && subtitleWords[meta[i+1]] {
+			continue
+		}
+		seen[code] = true
+		out = append(out, code)
+	}
+	return out
+}
+
+// reSeasonToken is a season or episode marker as one token ("s01", "s01e02",
+// "2x05"): where an episode's release metadata begins.
+var reSeasonToken = regexp.MustCompile(`^(s\d{1,3}(e\d{1,4})*|\d{1,2}x\d{1,3})$`)
+
+// subtitleWords mark the language before them as the subtitles' language.
+var subtitleWords = newSet("sub", "subs", "subbed", "subtitle", "subtitles", "subtitled")
+
+// releaseLanguage reads one lower-cased metadata token as a language: a name
+// ("hindi", "english") or a three-letter code ("hin", "eng").
+func releaseLanguage(tok string) (string, bool) {
+	if code, ok := languageNames[tok]; ok {
+		return code, true
+	}
+	if code, ok := releaseLanguageNames[tok]; ok {
+		return code, true
+	}
+	if len(tok) == 3 && languageCodes[tok] && !ambiguousReleaseCodes[tok] {
+		return canonicalLanguage(tok), true
+	}
+	if code, ok := releaseLanguageCodes[tok]; ok {
+		return code, true
+	}
+	return "", false
+}
+
+// releaseLanguageNames are the language names release titles use beyond the
+// subtitle table's, chiefly the Indian languages a multi-audio release names.
+var releaseLanguageNames = map[string]string{
+	"hindi": "hi", "tamil": "ta", "telugu": "te", "malayalam": "ml",
+	"kannada": "kn", "bengali": "bn", "marathi": "mr", "punjabi": "pa",
+	"gujarati": "gu", "urdu": "ur", "indonesian": "id", "malay": "ms",
+	"persian": "fa",
+}
+
+// releaseLanguageCodes are three-letter codes release titles use that the
+// subtitle table does not carry.
+var releaseLanguageCodes = map[string]string{
+	"tam": "ta", "tel": "te", "mal": "ml", "kan": "kn", "ben": "bn",
+}
+
+// ambiguousReleaseCodes are three-letter codes that are also ordinary words
+// in a release name, so are never read as a language there.
+var ambiguousReleaseCodes = newSet("may", "per", "cat", "dan", "fin", "ind", "nor")

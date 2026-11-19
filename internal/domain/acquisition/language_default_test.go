@@ -1,6 +1,7 @@
 package acquisition
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
@@ -58,5 +59,73 @@ func TestLanguageDefaultScoresPreferNotGate(t *testing.T) {
 	if ranked[0].Candidate.ID != "en" || ranked[len(ranked)-1].Candidate.ID != "it" {
 		t.Errorf("ranking should be en > undetermined > it, got %s ... %s",
 			ranked[0].Candidate.ID, ranked[len(ranked)-1].Candidate.ID)
+	}
+}
+
+// Language is a SET (#888): a release carrying several audio languages holds a
+// language rule when any of them does, the way a multi-region dump does. So a
+// Hindi-and-English release earns the English bonus AND the dub penalty, and
+// with the penalty the larger it ranks below a plain English release and below
+// an untagged one — while still never rejected for its language.
+func TestALanguageSetEarnsTheBonusAndThePenaltyTogether(t *testing.T) {
+	p := policy.Profile{
+		Name: "everyday",
+		Accept: []policy.Rule{
+			{Attribute: policy.AttrResolution, Op: policy.OpGTE, Value: policy.Num(720)},
+		},
+	}.WithLanguageDefault(policy.LanguageDefault{
+		Prefer: "en", Weight: 50, Foreign: []string{"it", "hi"}, Penalty: 100,
+	})
+
+	cand := func(id string, langs ...string) ReleaseCandidate {
+		attrs := Attributes{policy.AttrResolution: policy.Num(1080)}
+		if len(langs) > 0 {
+			attrs[policy.AttrLanguage] = policy.Texts(langs...).AsDerived()
+		}
+		return ReleaseCandidate{ID: id, Title: id, Provider: "test", Attributes: attrs}
+	}
+
+	cases := []struct {
+		id    string
+		langs []string
+		score int
+	}{
+		{"en", []string{"en"}, 50},
+		{"und", nil, 0},
+		{"hi-en", []string{"hi", "en"}, -50},
+		{"hi", []string{"hi"}, -100},
+		{"en-ja", []string{"en", "ja"}, 50}, // a language on neither list is neutral
+	}
+	var all []ReleaseCandidate
+	for _, tc := range cases {
+		e := Evaluate(cand(tc.id, tc.langs...), p)
+		if !e.Accepted {
+			t.Errorf("%s was rejected; language must never gate: %+v", tc.id, e)
+		}
+		if e.Score != tc.score {
+			t.Errorf("%s scored %d, want %d: %+v", tc.id, e.Score, tc.score, e.Reasons)
+		}
+		all = append(all, cand(tc.id, tc.langs...))
+	}
+
+	ranked := EvaluateAll(all, p)
+	pos := map[string]int{}
+	for i, r := range ranked {
+		pos[r.Candidate.ID] = i
+	}
+	if pos["en"] >= pos["und"] || pos["und"] >= pos["hi-en"] || pos["hi-en"] >= pos["hi"] {
+		t.Errorf("ranking should be en > und > hi-en > hi, got positions %v", pos)
+	}
+
+	// §63 names the set, and that it was read from the release name.
+	e := Evaluate(cand("hi-en", "hi", "en"), p)
+	var named bool
+	for _, r := range e.Reasons {
+		if strings.Contains(r.Detail, "language [hi, en] (read from the release name)") {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("no reason names the derived language set: %+v", e.Reasons)
 	}
 }

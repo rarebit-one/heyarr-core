@@ -378,9 +378,11 @@ func holds(actual policy.Value, rule policy.Rule) bool {
 		return false
 	}
 	if actual.Texts != nil {
-		// A set-valued attribute (a ROM's regions, policy.AttrRegion) holds a
-		// rule when ANY member does: "(USA, Europe)" is a USA dump and a Europe
-		// dump at once. eq/in ask "is one of them this", neq/nin "is none".
+		// A set-valued attribute (a ROM's regions, policy.AttrRegion; a
+		// release's audio languages, policy.AttrLanguage) holds a rule when ANY
+		// member does: "(USA, Europe)" is a USA dump and a Europe dump at once,
+		// and a Hindi-and-English release is both. eq/in ask "is one of them
+		// this", neq/nin "is none".
 		switch rule.Op {
 		case policy.OpEq:
 			return inSet(actual.Texts, want.Text)

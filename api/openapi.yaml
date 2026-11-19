@@ -10602,11 +10602,19 @@ components:
             detection in Milestone 2 is a substring match on the ffprobe
             profile and is a recorded weakness; a release *title* is worse
             evidence, not better.
+
+            `language` and `region` are **sets**, a list of names, because one
+            release often carries several (`["hi", "en"]` for a Hindi and
+            English release). A rule holds when any member matches, so such a
+            release earns a `language eq en` bonus and a `language in [hi]`
+            penalty together. A single name is read as a set of one.
           additionalProperties:
             oneOf:
               - type: integer
               - type: string
               - type: boolean
+              - type: array
+                items: { type: string }
               - type: "null"
 
     Evaluation:
@@ -11555,6 +11563,11 @@ components:
             `prefer`, invisible to §63's reasons — the opaque scoring §61
             rejects. Say "bluray beats webrip" with two preferences instead,
             and it appears in the explanation.
+
+            `language` is the release's audio languages as ISO-639-1 codes, and
+            it is a **set**: a release naming Hindi and English is `[hi, en]`.
+            A rule holds when any member matches, so `eq en` and `in [hi]` can
+            both hold for one release.
         op:
           type: string
           enum: [eq, neq, gte, lte, in, nin]

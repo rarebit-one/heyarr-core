@@ -202,7 +202,8 @@ var schemaExplainRelease = obj(map[string]any{
 					"audio_channels": integer(""),
 					"hdr":            boolean(""),
 					"size_bytes":     integer(""),
-					"language":       str(""),
+					"language": strArray("The audio languages, ISO-639-1: [\"hi\", \"en\"] for a " +
+						"release carrying both. A rule holds when any one matches; a single name is a set of one."),
 					"region": strArray("A ROM dump's regions as its name tags them: " +
 						"[\"usa\", \"europe\"] for \"(USA, Europe)\". A rule holds when any one matches."),
 				},

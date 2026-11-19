@@ -562,9 +562,10 @@ func coerce(attr policy.Attribute, kind policy.Kind, value any) (policy.Value, e
 		}
 		return policy.Num(int64(n)), nil
 	case policy.KindText:
-		if list, isList := value.([]any); isList && attr == policy.AttrRegion {
-			// Region is the one set-valued attribute: a dump is often several
-			// regions at once (ADR-0121 §5), and a search records them all.
+		if list, isList := value.([]any); isList && (attr == policy.AttrRegion || attr == policy.AttrLanguage) {
+			// Region and language are the set-valued attributes: a dump is often
+			// several regions at once (ADR-0121 §5), and a release several audio
+			// languages (#888), and a search records them all.
 			names := make([]string, 0, len(list))
 			for _, item := range list {
 				name, isName := item.(string)
@@ -581,6 +582,10 @@ func coerce(attr policy.Attribute, kind policy.Kind, value any) (policy.Value, e
 		str, ok := value.(string)
 		if !ok {
 			return policy.Value{}, invalidParams("%s takes a name, not %v", attr, value)
+		}
+		if attr == policy.AttrLanguage {
+			// One language is a set of one, the shape a search records.
+			return policy.Texts(str), nil
 		}
 		return policy.Text(str), nil
 	case policy.KindFlag:
