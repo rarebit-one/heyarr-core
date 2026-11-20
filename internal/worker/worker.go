@@ -80,6 +80,14 @@ const schemaWait = 2 * time.Minute
 // speed, and every one of those bets in this repo has eventually lost on CI.
 const schemaPollInterval = 100 * time.Millisecond
 
+// databaseOptions opens the database as a long-running role: a write stuck
+// behind another process's lock fails after ServiceWriteWait, not the one
+// minute a one-shot command waits (#910). Both the full and the personal
+// worker use it.
+func databaseOptions(path string, log *slog.Logger) sqlite.Options {
+	return sqlite.Options{Path: path, Logger: log, WriteWait: sqlite.ServiceWriteWait}
+}
+
 // Run claims and executes jobs until ctx is cancelled, then drains.
 //
 // Started and ready are two different things here, and the log says so. A
@@ -113,7 +121,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("worker: %w", err)
 	}
 
-	db, err := sqlite.Open(startupCtx, sqlite.Options{Path: w.cfg.Database.Path, Logger: w.log})
+	db, err := sqlite.Open(startupCtx, databaseOptions(w.cfg.Database.Path, w.log))
 	if err != nil {
 		return fmt.Errorf("worker: opening database: %w", err)
 	}

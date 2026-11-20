@@ -182,3 +182,30 @@ func TestIsBusyOnlyMatchesLocking(t *testing.T) {
 		t.Error("IsBusy(nil) = true")
 	}
 }
+
+// A one-shot command opens with zero Options and waits CommandWriteWait; a
+// value it is given is used as is (#910 follow-up).
+func TestWriteWaitDefaultsToTheCommandWait(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   time.Duration
+		want time.Duration
+	}{
+		{"unset is a command", 0, CommandWriteWait},
+		{"a service's wait is kept", ServiceWriteWait, ServiceWriteWait},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := Open(t.Context(), Options{Path: filepath.Join(t.TempDir(), "heyarr.db"), WriteWait: tc.in})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			if got := db.WriteWait(); got != tc.want {
+				t.Errorf("WriteWait = %s, want %s", got, tc.want)
+			}
+		})
+	}
+	if CommandWriteWait != time.Minute || ServiceWriteWait != 15*time.Second {
+		t.Errorf("CommandWriteWait = %s, ServiceWriteWait = %s; want 1m and 15s", CommandWriteWait, ServiceWriteWait)
+	}
+}

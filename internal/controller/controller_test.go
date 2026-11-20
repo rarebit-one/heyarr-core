@@ -288,3 +288,17 @@ func TestNotifyPlaneWithoutBearerStopsStartupWithoutWebLogin(t *testing.T) {
 		t.Fatalf("startup failed for another reason: %v", err)
 	}
 }
+
+// The controller is long-running: it waits ServiceWriteWait for another
+// process's write lock, not the minute a one-shot command waits (#910).
+func TestControllerOpensWithTheServiceWriteWait(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.Path = filepath.Join(t.TempDir(), "heyarr.db")
+	opts := New(cfg, slog.New(slog.DiscardHandler)).databaseOptions()
+	if opts.WriteWait != sqlite.ServiceWriteWait {
+		t.Errorf("WriteWait = %s, want %s", opts.WriteWait, sqlite.ServiceWriteWait)
+	}
+	if opts.Path != cfg.Database.Path {
+		t.Errorf("Path = %q, want %q", opts.Path, cfg.Database.Path)
+	}
+}
