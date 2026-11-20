@@ -346,12 +346,26 @@ func incompatibleStreams(media MediaProfile, device DeviceProfile) []Reason {
 		})
 	}
 	// A zero maximum is "no limit stated", not a limit of zero.
-	if device.MaxWidth > 0 && device.MaxHeight > 0 &&
-		(int64(media.Width) > device.MaxWidth || int64(media.Height) > device.MaxHeight) {
+	//
+	// A height binds on its own; a width only beside a height. A client's
+	// declaration states a height and never a width (ADR-0069), and the leg
+	// scales whenever the picture is taller than it — so a planner that
+	// waited for the pair answered DIRECT for a stream it was about to
+	// downscale (#892). A width alone has no writer (M2-05 refuses half a
+	// limit) and no leg that would honour it, so it is still not guessed at.
+	switch {
+	case device.MaxWidth > 0 && device.MaxHeight > 0 &&
+		(int64(media.Width) > device.MaxWidth || int64(media.Height) > device.MaxHeight):
 		out = append(out, Reason{
 			Code: ReasonResolutionTooHigh,
 			Detail: fmt.Sprintf("%dx%d is past the device's %dx%d",
 				media.Width, media.Height, device.MaxWidth, device.MaxHeight),
+		})
+	case device.MaxWidth <= 0 && device.MaxHeight > 0 && int64(media.Height) > device.MaxHeight:
+		out = append(out, Reason{
+			Code: ReasonResolutionTooHigh,
+			Detail: fmt.Sprintf("%dx%d is past the device's max height %d",
+				media.Width, media.Height, device.MaxHeight),
 		})
 	}
 	if device.MaxBitrateBPS > 0 && media.BitrateBPS > device.MaxBitrateBPS {

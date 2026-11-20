@@ -219,6 +219,13 @@ func (a *API) planForClient(
 		if body.Client.SupportsHDR == nil {
 			client.SupportsHDR = device.SupportsHDR
 		}
+		// The leg scales to the client's height, so the decision is held to
+		// it too: a registered device that takes 2160 lines and a request
+		// capped at 720 is a re-encode, and the plan says so (#892). Only
+		// the height, because only the height is what the leg honours.
+		if client.MaxHeight > 0 && (device.MaxHeight <= 0 || int64(client.MaxHeight) < device.MaxHeight) {
+			device.MaxHeight = int64(client.MaxHeight)
+		}
 	}
 	route, err := a.routeBlob(ctx, blobHash)
 	if err != nil {

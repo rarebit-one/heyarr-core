@@ -10182,8 +10182,11 @@ components:
             The tallest picture the client will take. Zero or absent means no
             limit. A taller picture is still served: as a `stream` with the
             video re-encoded and scaled down to this height, even when the
-            client decodes the source codec. When choosing among a work's
-            copies, a copy taller than this does not fit.
+            client decodes the source codec, and the plan's `decision` is then
+            `transcode` with `resolution_too_high` among its `reasons` (#892).
+            Beside a `device_id`, the lower of this and the device's stored
+            height is the one the decision holds the picture to. When choosing
+            among a work's copies, a copy taller than this does not fit.
       example:
         containers: [mp4, mkv, webm]
         video: [h264, hevc, vp9, av1]

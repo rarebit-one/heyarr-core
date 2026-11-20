@@ -367,6 +367,14 @@ stable.
   profile. The media profile's last-copy rule used to spare such a row forever,
   with no bytes behind it. A blob that is not released and has lost its bytes
   is still `missing` damage.
+- **A plan's `decision` says `transcode` when the stream will scale down to
+  the client's `max_height`** (#892). A client declaration states a height
+  and no width, and the planner held a picture only to a width and height
+  pair, so a copy chosen as `smallest_over_limit` was planned `direct` with
+  no reasons while its stream URL carried the cap. A height now binds on its
+  own (`resolution_too_high`), and beside a `device_id` the decision is held
+  to the request's `max_height` when it is under the device's, as the stream
+  already was. `mode` and the stream are unchanged.
 - **`mnemosyne device revoke` works against a Mnemosyne node** (#914). The
   personal profile (ADR-0107) did not mount `DELETE
   /api/v1/identities/devices/{key}`, so the command answered `no route matches
