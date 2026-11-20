@@ -335,6 +335,16 @@ stable.
   profile with `vault.enabled=false`.
 
 ### Upgrading
+- **A config library's `content_type` must be one Heyarr understands**
+  (#896). `movie`, `series`, `music`, `book`, `document`, `game` or `rom`,
+  the same set `POST /libraries` has enforced since #227. A node whose
+  `libraries:` block still says `content_type: show` (or any other spelling)
+  now refuses to start and names the library and the set. Fix the config
+  before upgrading. If the library's database row also says `show`, changing
+  the config to `series` is refused as a content-type change, because a row
+  cannot yet be corrected in place: remove that library from the `libraries:`
+  block to start, and its row and roots stay as they are. Such rows are named
+  by a warning at start and marked `(unknown)` in `heyarr library list`.
 - **Migration 00060 runs a one-time `VACUUM`** to switch the database to
   `auto_vacuum=INCREMENTAL` (#721). On a large control plane this takes minutes
   at startup and needs free space about the size of `heyarr.db`, so plan for a
