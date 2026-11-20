@@ -1,6 +1,6 @@
 # 0126. A stream plan is also a seekable HLS presentation, cut where every run cuts it
 
-**Status:** Proposed
+**Status:** Accepted (2026-11-20, the owner's decision on #908)
 **Date:** 2026-11-19
 **Amends:** [ADR-0069](0069-a-client-that-cannot-decode-the-source-gets-an-on-the-fly-repackage.md) ("no HLS", "no seeking in v1", and its first revisit trigger)
 **Builds on:** ADR-0040 (a renderer fetches with a capability), ADR-0079 (the plain-HTTP render origin), ADR-0106 (the planned audio track), ADR-0125 (the tone-map)

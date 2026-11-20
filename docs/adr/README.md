@@ -120,4 +120,4 @@ An ADR that merely describes the code is not worth having.
 | [0123](0123-playback-chooses-among-a-works-copies-by-what-the-client-can-show.md) | Playback chooses among a work's copies by what the client can show | Accepted |
 | [0124](0124-a-library-is-renamed-in-place-its-id-is-its-identity.md) | A library is renamed in place; its id is its identity | Accepted |
 | [0125](0125-an-hdr-re-encode-for-an-sdr-screen-is-tone-mapped.md) | An HDR re-encode for an SDR screen is tone-mapped, and one that cannot be is refused | Accepted |
-| [0126](0126-a-stream-plan-is-also-a-seekable-hls-presentation.md) | A stream plan is also a seekable HLS presentation, cut where every run cuts it | Proposed |
+| [0126](0126-a-stream-plan-is-also-a-seekable-hls-presentation.md) | A stream plan is also a seekable HLS presentation, cut where every run cuts it | Accepted |
