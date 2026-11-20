@@ -139,6 +139,8 @@ type harnessOptions struct {
 	// and the device store resolving shared-space members (ADR-0108) — what the
 	// owner-gated routes need in front of them.
 	deviceAuth bool
+	// personal mounts the resource API as the personal profile does.
+	personal bool
 }
 
 type harnessOption func(*harnessOptions)
@@ -154,6 +156,13 @@ func withWrapAuthorizer(o *harnessOptions) { o.wrapAuthorizer = true }
 // withDeviceCredentials wires the device store as the Device-scheme verifier, with
 // every enrolled device management-authorised, and as the member resolver.
 func withDeviceCredentials(o *harnessOptions) { o.deviceAuth = true }
+
+// withPersonalProfile mounts what the Mnemosyne personal profile mounts from
+// the resource API — peer membership and the device tombstone (#762, #914) —
+// in place of its full route table, beside the personal-state plane and blob
+// routes. controller.TestProfileRouting pins the real profile's table; this
+// lets the CLI be driven against the same surface.
+func withPersonalProfile(o *harnessOptions) { o.personal = true }
 
 // allManaged is a ManagementAuthorizer that authorises every device for write.
 type allManaged struct{}
@@ -315,6 +324,9 @@ func newAPIHarness(t *testing.T, opts ...harnessOption) *apiHarness {
 		CASRoot:            store2.Root(),
 		Mount:              []httpapi.MountFunc{api.Mount, blobHandler.Mount, psAPI.Mount},
 	}
+	if ho.personal {
+		srvOpts.Mount = []httpapi.MountFunc{blobHandler.Mount, psAPI.Mount, api.MountPeers, api.MountDeviceRevocation}
+	}
 	if ho.deviceAuth {
 		srvOpts.DeviceVerifier = identities
 		srvOpts.ManagementAuthorizer = allManaged{}
@@ -373,6 +385,17 @@ func (h *apiHarness) args(rest ...string) []string {
 func (h *apiHarness) run(args ...string) (stdout, stderr string, err error) {
 	h.t.Helper()
 	return run(h.t, context.Background(), h.args(args...)...)
+}
+
+// mustRunMnemosyne executes a command through the mnemosyne root command and
+// fails the test if it did not succeed.
+func (h *apiHarness) mustRunMnemosyne(args ...string) string {
+	h.t.Helper()
+	out, errOut, err := runMnemosyneCmd(h.t, context.Background(), h.args(args...)...)
+	if err != nil {
+		h.t.Fatalf("mnemosyne %s: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, out, errOut)
+	}
+	return out
 }
 
 // mustRun executes a command and fails the test if it did not succeed.

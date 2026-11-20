@@ -6,6 +6,9 @@ Revoke a device at this peer and re-key the spaces it could read (ADR-0068, ADR-
 
 Revoke one of a user's devices at this peer, then rotate away from it.
 
+<device> is the device identity id, its key ("ed25519:<hex>"), or the same key
+as bare hex.
+
 The revocation is the peer's own tombstone (DELETE /identities/devices): the
 device stops authenticating here at once, whatever the identity's membership
 ops say, and stays refused if re-presented. It is NOT a membership op — the peer
@@ -23,7 +26,7 @@ reported as skipped, for a device that can. Only the named device is re-keyed
 away: the devices it admitted are untouched.
 
 ```
-heyarr device revoke <device-key> [flags]
+heyarr device revoke <device> [flags]
 ```
 
 ### Options

@@ -342,6 +342,16 @@ stable.
   alternative.
 
 ### Fixed
+- **`mnemosyne device revoke` works against a Mnemosyne node** (#914). The
+  personal profile (ADR-0107) did not mount `DELETE
+  /api/v1/identities/devices/{key}`, so the command answered `no route matches
+  /api/v1/identities/devices/...`. An uninstalled app's admission then stayed
+  valid until it expired, and the spaces were never re-keyed away from it. The
+  device tombstone now has its own mount function, which both profiles
+  register. The rest of the identity admin surface is still not mounted on
+  Mnemosyne: users are pinned on the host with `admin user pin`. The route, and
+  `device revoke`, now name the device by its `ed25519:<hex>` key, the same key
+  as bare hex, or its device identity id.
 - **A by-hand select or block on a want with a grab already queued now does
   what it says** (#888). `POST /desired/{id}/select` used to answer 200 for a
   want that was `QUEUED`, `DOWNLOADING` or resting idle, and the grab it queued

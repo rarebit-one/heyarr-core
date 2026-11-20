@@ -82,3 +82,78 @@ func TestDeviceRevokeTombstonesAndReportsRotation(t *testing.T) {
 		t.Fatal("revoking an unknown device succeeded")
 	}
 }
+
+// `mnemosyne device revoke` against the personal profile (#914): it used to
+// stop at the router's "no route matches /api/v1/identities/devices/...". Alice
+// has a laptop and an old phone, both holding a personal space; revoking the
+// phone by its device identity id tombstones it and re-keys the space away from
+// it, so only the laptop holds the new key. A second device is revoked by its
+// key as bare hex, tombstone only.
+func TestMnemosyneDeviceRevokeOnThePersonalProfile(t *testing.T) {
+	ctx := context.Background()
+	h := newAPIHarness(t, withAPIAuth, withWrapAuthorizer, withDeviceCredentials, withPersonalProfile)
+	token, err := h.tokens.Create(ctx, "ops-admin", []auth.Scope{auth.ScopeRead, auth.ScopeWrite, auth.ScopeAdmin}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice := h.enrolUser(t, "alice")
+
+	var created spaceCreateView
+	out := h.mustRunMnemosyne("space", "create", "--kind", "personal", "--recovery=false", "--device-dir", alice.dir,
+		"--token", token.Secret, "--json")
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatalf("space create --json: %v\n%s", err, out)
+	}
+	phone := h.enrolAnotherDevice(t, alice, "alice-old-phone")
+	h.mustRunMnemosyne("space", "wrap", created.ID, "--all-devices", "--device-dir", alice.dir)
+	if !h.wrappedFor(t, created.ID, phone.encKey) {
+		t.Fatal("setup: the space is not wrapped for the phone")
+	}
+
+	out = h.mustRunMnemosyne("device", "revoke", phone.pinned.ID, "--device-dir", alice.dir, "--token", token.Secret, "--json")
+	var view deviceRevokeView
+	if err := json.Unmarshal([]byte(out), &view); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if view.Device.ID != phone.pinned.ID || view.Device.RevokedAt == nil || view.Device.EncryptionKey != phone.encKey {
+		t.Fatalf("revoked = %+v", view.Device)
+	}
+	if len(view.Skipped) != 0 || len(view.Rotated) != 1 || view.Rotated[0].SpaceID != created.ID ||
+		view.Rotated[0].KeyEpoch != 1 || len(view.Rotated[0].Revoked) != 1 || view.Rotated[0].Revoked[0] != phone.encKey {
+		t.Fatalf("rotated/skipped = %+v / %+v, want the space re-keyed away from the phone", view.Rotated, view.Skipped)
+	}
+	if h.wrappedFor(t, created.ID, phone.encKey) || !h.wrappedFor(t, created.ID, alice.encKey) {
+		t.Fatal("after the revoke the space is still wrapped for the phone, or no longer for the laptop")
+	}
+	if d, err := h.identities.LookupDevice(ctx, phone.pinned.DeviceKey); err != nil || d.RevokedAt == nil {
+		t.Fatalf("the phone is not tombstoned: %+v, %v", d, err)
+	}
+	// The laptop still reads the space, across the rotation.
+	h.mustRunMnemosyne("space", "read", created.ID, "--device-dir", alice.dir, "--token", token.Secret)
+
+	tablet := h.enrolAnotherDevice(t, alice, "alice-old-tablet")
+	bare := strings.TrimPrefix(tablet.pinned.DeviceKey, identity.Algorithm+":")
+	human := h.mustRunMnemosyne("device", "revoke", bare, "--no-rotate", "--token", token.Secret)
+	if !strings.Contains(human, "revoked "+tablet.pinned.DeviceKey) {
+		t.Fatalf("human output:\n%s", human)
+	}
+	if d, err := h.identities.LookupDevice(ctx, tablet.pinned.DeviceKey); err != nil || d.RevokedAt == nil {
+		t.Fatalf("the tablet is not tombstoned: %+v, %v", d, err)
+	}
+}
+
+// wrappedFor reports whether the space's current key is wrapped for recipient
+// in the store.
+func (h *apiHarness) wrappedFor(t *testing.T, spaceID, recipient string) bool {
+	t.Helper()
+	keys, err := h.spaces.WrappedKeysFor(context.Background(), spaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range keys {
+		if k.Recipient == recipient {
+			return true
+		}
+	}
+	return false
+}

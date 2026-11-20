@@ -37,9 +37,12 @@ func newDeviceRevokeCommand(_ Options, configPath, deviceDir *string) *cobra.Com
 		noRotate bool
 	)
 	cmd := &cobra.Command{
-		Use:   "revoke <device-key>",
+		Use:   "revoke <device>",
 		Short: "Revoke a device at this peer and re-key the spaces it could read (ADR-0068, ADR-0049)",
 		Long: `Revoke one of a user's devices at this peer, then rotate away from it.
+
+<device> is the device identity id, its key ("ed25519:<hex>"), or the same key
+as bare hex.
 
 The revocation is the peer's own tombstone (DELETE /identities/devices): the
 device stops authenticating here at once, whatever the identity's membership
@@ -58,9 +61,8 @@ reported as skipped, for a device that can. Only the named device is re-keyed
 away: the devices it admitted are untouched.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			deviceKey := args[0]
 			return flags.withClient(cmd, configPath, func(ctx context.Context, c *apiclient.Client) error {
-				revoked, err := c.RevokeIdentityDevice(ctx, deviceKey)
+				revoked, err := c.RevokeIdentityDevice(ctx, args[0])
 				if err != nil {
 					return err
 				}

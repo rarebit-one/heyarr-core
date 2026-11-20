@@ -10,8 +10,8 @@ requires before anything the user signs is honoured — the same write as
 POST /api/v1/identities/users.
 
 It exists for a controller that does not mount that route: the Mnemosyne
-personal profile mounts no identities API, so this is how its first user is
-pinned. On heyarr it is equivalent to the route.
+personal profile mounts no user-pinning route (only the device tombstone,
+DELETE /api/v1/identities/devices), so this is how its first user is pinned. On heyarr it is equivalent to the route.
 
 Both keys are PUBLIC. --recovery-key is required: an identity pinned without
 one cannot have new spaces wrapped for its paper recovery secret (§41).

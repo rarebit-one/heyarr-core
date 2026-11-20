@@ -417,11 +417,43 @@ func (s *Store) RevokeUser(ctx context.Context, publicKey string) (User, error) 
 	return user, nil
 }
 
+// ResolveDevice returns the enrolled device a reference names: its rendered
+// key ("ed25519:<hex>"), the same key as bare hex, or its device identity id.
+// It is what an operator-facing selection resolves through (#914), and it is
+// lenient where ParsePublicKey is strict on purpose: a bare hex key is refused
+// where a key becomes trusted, but here it can only select a row that is
+// already enrolled, so the worst a mis-paste does is ErrUnknownDevice.
+func (s *Store) ResolveDevice(ctx context.Context, ref string) (Device, error) {
+	ref = strings.TrimSpace(ref)
+	switch {
+	case strings.Contains(ref, ":"):
+		return s.LookupDevice(ctx, ref)
+	case isBareDeviceKey(ref):
+		return s.LookupDevice(ctx, identity.Algorithm+":"+ref)
+	}
+	row := s.reader.QueryRowContext(ctx,
+		`SELECT id, user_id, device_key, encryption_key, name, cert, enrolled_at, expires_at, revoked_at
+		 FROM device_identities WHERE id = ?`, ref)
+	return scanDevice(row)
+}
+
+// isBareDeviceKey reports whether s is a device key's hex with no algorithm
+// prefix: 64 lowercase hex characters, the shape FormatPublicKey renders after
+// the colon. A device identity id is a UUID and never matches.
+func isBareDeviceKey(s string) bool {
+	if len(s) != 2*32 || s != strings.ToLower(s) {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
 // RevokeDevice tombstones a single device, leaving its row so a re-presented
 // cert for it is refused rather than silently re-enrolled. Idempotent: revoking
-// an already-revoked device returns it unchanged.
-func (s *Store) RevokeDevice(ctx context.Context, deviceKey string) (Device, error) {
-	device, err := s.LookupDevice(ctx, deviceKey)
+// an already-revoked device returns it unchanged. The device is named by any
+// reference ResolveDevice accepts.
+func (s *Store) RevokeDevice(ctx context.Context, ref string) (Device, error) {
+	device, err := s.ResolveDevice(ctx, ref)
 	if err != nil {
 		return Device{}, err
 	}

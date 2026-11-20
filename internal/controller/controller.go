@@ -977,6 +977,12 @@ func (c *Controller) mounts(ctx context.Context, d mountDeps) (apiMounts, public
 	// destination for any of them only through a membership record — which
 	// `mnemosyne peers add` writes over the client API, exactly as heyarr's
 	// does. Tokens stay CLI-only: `token create` opens the database directly.
+	//
+	// The device tombstone (DELETE /identities/devices, #914) is the second
+	// exception: a device's admission outlives its uninstalled app, and the
+	// tombstone is how this peer stops honouring it before it expires. Users
+	// are still pinned from the host (`admin user pin`), so the rest of the
+	// identity admin surface stays unmounted.
 	if c.cfg.Profile == config.ProfilePersonal {
 		_, contentMounts, err := c.contentRoutes(d, queue, cat)
 		if err != nil {
@@ -991,7 +997,7 @@ func (c *Controller) mounts(ctx context.Context, d mountDeps) (apiMounts, public
 			return nil, nil, err
 		}
 		// vault.enabled is always true on the personal profile, but be explicit.
-		apiMounts = append(contentMounts, psAPI.Mount, peersAPI.MountPeers)
+		apiMounts = append(contentMounts, psAPI.Mount, peersAPI.MountPeers, peersAPI.MountDeviceRevocation)
 		return apiMounts, nil, nil
 	}
 
@@ -1152,8 +1158,8 @@ func (c *Controller) resourceAPI(ctx context.Context, d mountDeps, queue *jobs.Q
 }
 
 // peersAPI builds the resource API with only what the peer-membership routes
-// need, for the personal profile (ADR-0107, #762). Only MountPeers is ever
-// mounted from the value it returns.
+// need, for the personal profile (ADR-0107, #762). Only MountPeers and
+// MountDeviceRevocation (#914) are ever mounted from the value it returns.
 //
 // It is deliberately not resourceAPI: that builds the provider registry,
 // validates download paths and mints the renderer secret, none of which a
@@ -1161,7 +1167,8 @@ func (c *Controller) resourceAPI(ctx context.Context, d mountDeps, queue *jobs.Q
 // membership store (enrolment and revocation), the job queue (reconcile on
 // demand, and cancelling the transfers queued to a removed peer), the event
 // log and the token store the constructor insists on, and the catalog for the
-// snapshot state `peers show` reports.
+// snapshot state `peers show` reports. The device tombstone needs only the
+// identity store.
 func (c *Controller) peersAPI(d mountDeps, queue *jobs.Queue, cat *catalog.Catalog) (*resources.API, error) {
 	api, err := resources.New(resources.Options{
 		DB:         d.db,
@@ -1170,6 +1177,7 @@ func (c *Controller) peersAPI(d mountDeps, queue *jobs.Queue, cat *catalog.Catal
 		Tokens:     d.tokens,
 		Catalog:    cat,
 		Membership: d.members,
+		Identities: d.identities,
 		SelfPeerID: d.selfPeerID,
 		Logger:     c.log,
 	})
