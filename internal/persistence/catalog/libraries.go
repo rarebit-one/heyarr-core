@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 )
 
@@ -63,6 +65,13 @@ func (c *Catalog) ReconcileLibraries(ctx context.Context, specs []LibrarySpec) (
 			}
 			if spec.ContentType == "" {
 				return fmt.Errorf("catalog: library %q needs a content_type", spec.Name)
+			}
+			// Known, not merely non-empty (#896): config.Validate checks the
+			// same, and so does POST /libraries, but this is the write and the
+			// catalog does not trust its callers to have asked.
+			if !identification.IsContentType(spec.ContentType) {
+				return fmt.Errorf("catalog: library %q has content_type %q, which is not one Heyarr understands — use one of: %s",
+					spec.Name, spec.ContentType, strings.Join(identification.ContentTypes(), ", "))
 			}
 
 			libraryID, created, err := getOrCreateLibrary(ctx, tx, spec, stamp)
@@ -143,6 +152,15 @@ func getOrCreateLibrary(ctx context.Context, tx *sql.Tx, spec LibrarySpec, stamp
 	// Changing a library's content type would re-identify every work under it,
 	// which is a migration rather than a config edit. Refusing names it.
 	if contentType != spec.ContentType {
+		// A row whose type predates #227's gate is the one an operator will hit
+		// while correcting the config: the new spelling is right and the row
+		// still cannot follow it. Say that, rather than "create a new library".
+		if !identification.IsContentType(contentType) {
+			return "", false, fmt.Errorf("catalog: library %q is %q in the database, which is not a content type Heyarr "+
+				"understands, and %s in the configuration — a library's content type cannot be changed in place yet (#896); "+
+				"remove the library from the configuration to start, and the existing row is kept as it is",
+				spec.Name, contentType, spec.ContentType)
+		}
 		return "", false, fmt.Errorf("catalog: library %q is %s in the database and %s in the configuration — "+
 			"a library's content type cannot be changed in place; create a new library instead",
 			spec.Name, contentType, spec.ContentType)
@@ -173,4 +191,47 @@ func getOrCreateRoot(ctx context.Context, tx *sql.Tx, libraryID, path, stamp str
 		return "", false, fmt.Errorf("catalog: re-reading library root %s: %w", path, err)
 	}
 	return existing, false, nil
+}
+
+// UnknownTypeLibrary is a library row whose content_type is not one Heyarr
+// understands.
+type UnknownTypeLibrary struct {
+	ID          string
+	Name        string
+	ContentType string
+}
+
+// LibrariesWithUnknownContentType reports the libraries whose stored
+// content_type identification.IsContentType refuses (#896).
+//
+// Every way in now refuses an unknown type, but a library created before #227
+// closed the API gate, or before #896 closed the config one, keeps what it was
+// given — `show`, in the one case on record. Such a library is identified as if
+// it declared no type and is never an acquisition target for a wanted series,
+// and nothing about it looks wrong. This is how the controller finds them to
+// say so at start.
+//
+// Filtered here rather than in SQL so the vocabulary stays one list.
+func (c *Catalog) LibrariesWithUnknownContentType(ctx context.Context) ([]UnknownTypeLibrary, error) {
+	rows, err := c.db.Reader().QueryContext(ctx,
+		`SELECT id, name, content_type FROM libraries ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: listing library content types: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []UnknownTypeLibrary
+	for rows.Next() {
+		var l UnknownTypeLibrary
+		if err := rows.Scan(&l.ID, &l.Name, &l.ContentType); err != nil {
+			return nil, fmt.Errorf("catalog: listing library content types: %w", err)
+		}
+		if !identification.IsContentType(l.ContentType) {
+			out = append(out, l)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: listing library content types: %w", err)
+	}
+	return out, nil
 }

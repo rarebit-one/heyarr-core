@@ -147,3 +147,38 @@ func rootCount(libs []client.Library) int {
 	}
 	return n
 }
+
+// A library whose type predates the gates (#896) is marked in `library list`
+// and named on stderr, so the table stays parseable; a known type is not.
+func TestLibraryListMarksAnUnknownContentType(t *testing.T) {
+	h := newAPIHarness(t)
+	h.mustRun("library", "add", "films", "--content-type", "movie", "--root", "/srv/a")
+	h.exec(`INSERT INTO libraries (id, name, content_type, enabled, created_at)
+		VALUES ('lib-legacy', 'tv', 'show', 1, '2026-08-01T00:00:00Z')`)
+
+	stdout, stderr, err := h.run("library", "list")
+	if err != nil {
+		t.Fatalf("library list: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stdout, "show (unknown)") {
+		t.Errorf("the table does not mark the unknown type:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "movie (unknown)") {
+		t.Errorf("the table marks a known type:\n%s", stdout)
+	}
+	if strings.Count(stderr, "warning:") != 1 {
+		t.Fatalf("want exactly one warning on stderr, got:\n%s", stderr)
+	}
+	for _, want := range []string{`library "tv"`, `content type "show"`, "series", "#896"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the warning does not contain %q:\n%s", want, stderr)
+		}
+	}
+
+	// --json is the row as the server has it, unannotated.
+	for _, l := range listLibraries(t, h) {
+		if strings.Contains(l.ContentType, "unknown") {
+			t.Errorf("--json annotated a content type: %q", l.ContentType)
+		}
+	}
+}

@@ -273,6 +273,11 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		{"library without content type", func(c *Config) {
 			c.Libraries = []Library{{Name: "films", Roots: []string{"/srv/media"}}}
 		}, "has no content_type"},
+		// #896: the spelling #227 found in the wild. The message names the
+		// library, the type and the vocabulary, as POST /libraries does.
+		{"library with unknown content type", func(c *Config) {
+			c.Libraries = []Library{{Name: "tv", ContentType: "show", Roots: []string{"/srv/media"}}}
+		}, `library "tv" has content_type "show", which is not one Heyarr understands — use one of: movie, series, music, book, document, game, rom`},
 		{"relative library root", func(c *Config) {
 			c.Libraries = []Library{{Name: "films", ContentType: "movie", Roots: []string{"media"}}}
 		}, "must be an absolute path"},

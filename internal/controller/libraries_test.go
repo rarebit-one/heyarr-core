@@ -91,6 +91,50 @@ func TestTheControllerRefusesAChangedContentType(t *testing.T) {
 	}
 }
 
+// A library row whose type predates the gates (#896) is named at start, with or
+// without a libraries block — an API-created library has the same history —
+// and a correct one is not.
+func TestTheControllerWarnsAboutALibraryWithAnUnknownContentType(t *testing.T) {
+	cfg := testConfig(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := New(cfg, discard()).Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	db := openDB(t, cfg)
+	for _, q := range []string{
+		`INSERT INTO libraries (id, name, content_type, enabled, created_at)
+			VALUES ('lib-tv', 'tv', 'show', 1, '2026-08-01T00:00:00Z')`,
+		`INSERT INTO libraries (id, name, content_type, enabled, created_at)
+			VALUES ('lib-films', 'films', 'movie', 1, '2026-08-01T00:00:00Z')`,
+	} {
+		if _, err := db.Writer().ExecContext(context.Background(), q); err != nil {
+			t.Fatalf("seeding: %v", err)
+		}
+	}
+	_ = db.Close()
+
+	var buf bytes.Buffer
+	if err := New(cfg, slog.New(slog.NewTextHandler(&buf, nil))).Run(ctx); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	var warned []string
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(line, "content type Heyarr does not understand") {
+			warned = append(warned, line)
+		}
+	}
+	if len(warned) != 1 {
+		t.Fatalf("%d warnings, want exactly one (for tv):\n%s", len(warned), buf.String())
+	}
+	for _, want := range []string{"level=WARN", "library=tv", "content_type=show", "series", "#896"} {
+		if !strings.Contains(warned[0], want) {
+			t.Errorf("warning does not contain %q:\n%s", want, warned[0])
+		}
+	}
+}
+
 func openDB(t *testing.T, cfg config.Config) *sqlite.DB {
 	t.Helper()
 	db, err := sqlite.Open(context.Background(), sqlite.Options{Path: cfg.Database.Path})

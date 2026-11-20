@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/rarebit-one/heyarr-core/internal/config"
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
@@ -91,10 +93,6 @@ func warnIfIngestWillCopy(casRoot, libraryPath string, log *slog.Logger) {
 // library changed while Heyarr was not running and nothing else would notice.
 // It costs a stat per file when nothing changed (M1-12).
 func reconcileLibraries(ctx context.Context, db *sqlite.DB, cfg config.Config, log *slog.Logger) error {
-	if len(cfg.Libraries) == 0 {
-		return nil
-	}
-
 	eventLog, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader(), Logger: log})
 	if err != nil {
 		return fmt.Errorf("controller: opening the event log: %w", err)
@@ -108,6 +106,15 @@ func reconcileLibraries(ctx context.Context, db *sqlite.DB, cfg config.Config, l
 	})
 	if err != nil {
 		return fmt.Errorf("controller: opening the catalog: %w", err)
+	}
+
+	// Before the config block, and whether or not there is one: a library
+	// created through the API has the same history.
+	if err := warnUnknownContentTypes(ctx, cat, log); err != nil {
+		return err
+	}
+	if len(cfg.Libraries) == 0 {
+		return nil
 	}
 
 	specs := make([]catalog.LibrarySpec, 0, len(cfg.Libraries))
@@ -146,5 +153,32 @@ func reconcileLibraries(ctx context.Context, db *sqlite.DB, cfg config.Config, l
 		warnIfIngestWillCopy(cfg.CAS.Root, root.Path, log)
 	}
 	log.Info("libraries reconciled", "libraries", len(specs), "roots", len(roots))
+	return nil
+}
+
+// warnUnknownContentTypes says so, once per library at start, when a library's
+// stored content_type is not one Heyarr understands (#896).
+//
+// Every way in now refuses one, but a row created before the gates closed keeps
+// what it was given. Such a library is identified as if it declared no type —
+// every rule, movie rules first — and acquisition never chooses it as a target,
+// and neither failure looks like a declaration nobody checked. A warning rather
+// than a refusal to start, because the row cannot yet be corrected in place and
+// a node that will not start is a worse place to be than one that is wrong in a
+// way it names.
+func warnUnknownContentTypes(ctx context.Context, cat *catalog.Catalog, log *slog.Logger) error {
+	libs, err := cat.LibrariesWithUnknownContentType(ctx)
+	if err != nil {
+		return fmt.Errorf("controller: %w", err)
+	}
+	for _, l := range libs {
+		log.Warn("library has a content type Heyarr does not understand",
+			"library_id", l.ID,
+			"library", l.Name,
+			"content_type", l.ContentType,
+			"known", strings.Join(identification.ContentTypes(), ", "),
+			"cost", "identification ignores the library's type, and acquisition never chooses it as a target",
+			"fix", "a library's content type cannot yet be changed in place — see #896")
+	}
 	return nil
 }

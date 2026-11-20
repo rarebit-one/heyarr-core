@@ -20,6 +20,7 @@ import (
 	"github.com/knadh/koanf/v2"
 	"golang.org/x/text/language"
 
+	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/policy"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
@@ -1564,6 +1565,17 @@ func (c Config) Validate() error {
 		// rather than defaulted, because guessing wrong is worse than asking.
 		if lib.ContentType == "" {
 			return fmt.Errorf("config: library %q has no content_type", lib.Name)
+		}
+		// And it must be one Heyarr KNOWS, the same gate POST /libraries has
+		// had since #227 (#896). A config library was the other way in: `show`
+		// here was created and reconciled at every start, and a type no rule
+		// declares identifies a television tree with the movie rules first and
+		// is never a target for a wanted series. Refused rather than
+		// normalised, for the reason the API gives — the vocabulary is named,
+		// the guess is the operator's.
+		if !identification.IsContentType(lib.ContentType) {
+			return fmt.Errorf("config: library %q has content_type %q, which is not one Heyarr understands — use one of: %s",
+				lib.Name, lib.ContentType, strings.Join(identification.ContentTypes(), ", "))
 		}
 		if len(lib.Roots) == 0 {
 			return fmt.Errorf("config: library %q has no roots", lib.Name)

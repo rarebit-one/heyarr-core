@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strconv"
 	"strings"
@@ -362,10 +363,20 @@ func newLibraryListCommand(_ Options, configPath *string) *cobra.Command {
 					return emitJSON(cmd.OutOrStdout(), libs)
 				}
 				t := newTable("ID", "NAME", "TYPE", "ENABLED", "ROOTS")
+				var unknown []client.Library
 				for _, l := range libs {
-					t.add(l.ID, l.Name, l.ContentType, strconv.FormatBool(l.Enabled), rootSummary(l))
+					ct := l.ContentType
+					if !identification.IsContentType(ct) {
+						ct += " (unknown)"
+						unknown = append(unknown, l)
+					}
+					t.add(l.ID, l.Name, ct, strconv.FormatBool(l.Enabled), rootSummary(l))
 				}
-				return t.render(cmd.OutOrStdout(), "no libraries — create one with `heyarr library add <name> --content-type movie`")
+				if err := t.render(cmd.OutOrStdout(), "no libraries — create one with `heyarr library add <name> --content-type movie`"); err != nil {
+					return err
+				}
+				warnUnknownContentTypes(cmd.ErrOrStderr(), unknown)
+				return nil
 			})
 		},
 	}
@@ -374,6 +385,19 @@ func newLibraryListCommand(_ Options, configPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&contentType, "content-type", "", "only libraries of this content type")
 	cmd.Flags().StringVar(&search, "q", "", "only libraries whose name contains this")
 	return cmd
+}
+
+// warnUnknownContentTypes names each listed library whose content_type is not
+// one Heyarr understands (#896). Such a row predates the gates that now refuse
+// one, and its type is not cosmetic: identification ignores it and acquisition
+// never chooses the library as a target. On stderr, so the table stays the
+// table.
+func warnUnknownContentTypes(w io.Writer, libs []client.Library) {
+	for _, l := range libs {
+		_, _ = fmt.Fprintf(w, "warning: library %q has content type %q, which Heyarr does not understand (one of: %s) — "+
+			"identification ignores it and acquisition never targets this library; it cannot yet be corrected in place (#896)\n",
+			l.Name, l.ContentType, contentTypeList())
+	}
 }
 
 func rootSummary(l client.Library) string {
