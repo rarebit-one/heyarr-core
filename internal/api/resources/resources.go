@@ -419,6 +419,13 @@ func (a *API) Mount(r chi.Router) {
 	// Renaming a library in place (ADR-0124): the id, roots and assets stay, only
 	// the label changes. `write`, like the rest of library management.
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Patch("/libraries/{id}", a.updateLibrary)
+	// Correcting a library type Heyarr does not understand (#896, ADR-0127):
+	// an action, not a PATCH field, because it is allowed only from an unknown
+	// type. Mounted only with a catalog, which owns the write — see
+	// Options.Catalog.
+	if a.catalog != nil {
+		r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/libraries/{id}/retype", a.retypeLibrary)
+	}
 	r.With(httpapi.RequireScope(auth.ScopeWrite)).Post("/libraries/{id}/roots", a.createLibraryRoot)
 	// Amend an existing root's ingest configuration in place — today its
 	// materialisation mode (#222), so a store that shipped on `reflink` and

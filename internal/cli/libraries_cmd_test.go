@@ -169,7 +169,7 @@ func TestLibraryListMarksAnUnknownContentType(t *testing.T) {
 	if strings.Count(stderr, "warning:") != 1 {
 		t.Fatalf("want exactly one warning on stderr, got:\n%s", stderr)
 	}
-	for _, want := range []string{`library "tv"`, `content type "show"`, "series", "#896"} {
+	for _, want := range []string{`library "tv"`, `content type "show"`, "series", "heyarr library retype tv <type>"} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("the warning does not contain %q:\n%s", want, stderr)
 		}
@@ -179,6 +179,59 @@ func TestLibraryListMarksAnUnknownContentType(t *testing.T) {
 	for _, l := range listLibraries(t, h) {
 		if strings.Contains(l.ContentType, "unknown") {
 			t.Errorf("--json annotated a content type: %q", l.ContentType)
+		}
+	}
+}
+
+// `library retype` corrects a type Heyarr does not understand, by name or id
+// (#896, ADR-0127): the case on record is `show`, non-empty and with no roots.
+// A second run says there is nothing to do; a known type is refused with the
+// reason, and so is an unknown target.
+func TestLibraryRetype(t *testing.T) {
+	h := newAPIHarness(t)
+	h.mustRun("library", "add", "films", "--content-type", "movie", "--root", "/srv/a")
+	h.exec(`INSERT INTO libraries (id, name, content_type, enabled, created_at)
+		VALUES ('lib-legacy', 'shows', 'show', 1, '2026-08-01T00:00:00Z')`)
+
+	out := h.mustRun("library", "retype", "shows", "series")
+	if want := "retyped library shows (lib-legacy) from show to series"; !strings.Contains(out, want) {
+		t.Errorf("retype said %q, want %q", out, want)
+	}
+	for _, l := range listLibraries(t, h) {
+		if l.Name == "shows" && (l.ID != "lib-legacy" || l.ContentType != "series") {
+			t.Errorf("after the retype, shows = %+v, want lib-legacy as series", l)
+		}
+	}
+	if _, stderr, err := h.run("library", "list"); err != nil || strings.Contains(stderr, "warning:") {
+		t.Errorf("library list still warns after the retype: err=%v stderr=%s", err, stderr)
+	}
+
+	out = h.mustRun("library", "retype", "lib-legacy", "series")
+	if !strings.Contains(out, "already series; nothing to do") {
+		t.Errorf("a second retype said %q, want nothing to do", out)
+	}
+
+	out = h.mustRun("library", "retype", "shows", "series", "--json")
+	var lib client.Library
+	if err := json.Unmarshal([]byte(out), &lib); err != nil || lib.ContentType != "series" {
+		t.Errorf("--json = %s (%v), want the library as series", out, err)
+	}
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"films", "series"}, "already movie"},
+		{[]string{"shows", "tv"}, "use one of: movie, series"},
+		{[]string{"nope", "series"}, `no library called "nope"`},
+	} {
+		_, stderr, err := h.run(append([]string{"library", "retype"}, tc.args...)...)
+		if err == nil {
+			t.Errorf("retype %v succeeded", tc.args)
+			continue
+		}
+		if !strings.Contains(err.Error()+stderr, tc.want) {
+			t.Errorf("retype %v: err=%v stderr=%s, want %q", tc.args, err, stderr, tc.want)
 		}
 	}
 }

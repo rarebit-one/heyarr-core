@@ -266,6 +266,11 @@ type UpdateLibraryRequest struct {
 	Name *string `json:"name,omitempty"`
 }
 
+// RetypeLibraryRequest is the POST /libraries/{id}/retype body.
+type RetypeLibraryRequest struct {
+	ContentType string `json:"content_type"`
+}
+
 // UpdateRootRequest is the PATCH /libraries/{id}/roots/{rootID} body. A field
 // is a pointer so an omitted one leaves that setting untouched.
 type UpdateRootRequest struct {

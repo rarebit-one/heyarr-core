@@ -149,6 +149,11 @@ const (
 	// library's identity — and the payload carries both names so a reader can
 	// follow a library across the change.
 	TypeLibraryRenamed = "content.library.renamed"
+	// TypeLibraryRetyped is a library whose stored content type Heyarr did not
+	// understand taking one it does (#896, ADR-0127). It is never a change
+	// between two known types, which is refused. The payload carries both types
+	// so a reader can tell what the library was declared as before.
+	TypeLibraryRetyped = "content.library.retyped"
 	// TypeLibraryRootRemoved is one root leaving a library (#228): Heyarr stops
 	// scanning that directory. The counterpart to content.library_root.added.
 	// Assets ingested through the root are unaffected — an asset references its

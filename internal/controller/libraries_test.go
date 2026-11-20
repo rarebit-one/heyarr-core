@@ -128,7 +128,7 @@ func TestTheControllerWarnsAboutALibraryWithAnUnknownContentType(t *testing.T) {
 	if len(warned) != 1 {
 		t.Fatalf("%d warnings, want exactly one (for tv):\n%s", len(warned), buf.String())
 	}
-	for _, want := range []string{"level=WARN", "library=tv", "content_type=show", "series", "#896"} {
+	for _, want := range []string{"level=WARN", "library=tv", "content_type=show", "series", "heyarr library retype tv <type>"} {
 		if !strings.Contains(warned[0], want) {
 			t.Errorf("warning does not contain %q:\n%s", want, warned[0])
 		}

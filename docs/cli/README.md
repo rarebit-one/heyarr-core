@@ -69,6 +69,7 @@ The root command is documented in [`heyarr.md`](heyarr.md).
 | [`heyarr library add`](heyarr_library_add.md) | Create a library, optionally with roots |
 | [`heyarr library list`](heyarr_library_list.md) | List libraries and their roots |
 | [`heyarr library rename`](heyarr_library_rename.md) | Rename a library, keeping its id, roots and content |
+| [`heyarr library retype`](heyarr_library_retype.md) | Correct a library type Heyarr does not understand, keeping its content |
 | [`heyarr library rm`](heyarr_library_rm.md) | Remove an empty library and its roots |
 | [`heyarr library root add`](heyarr_library_root_add.md) | Add a root to an existing library |
 | [`heyarr library root rm`](heyarr_library_root_rm.md) | Remove a root from a library |

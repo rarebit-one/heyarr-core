@@ -121,3 +121,4 @@ An ADR that merely describes the code is not worth having.
 | [0124](0124-a-library-is-renamed-in-place-its-id-is-its-identity.md) | A library is renamed in place; its id is its identity | Accepted |
 | [0125](0125-an-hdr-re-encode-for-an-sdr-screen-is-tone-mapped.md) | An HDR re-encode for an SDR screen is tone-mapped, and one that cannot be is refused | Accepted |
 | [0126](0126-a-stream-plan-is-also-a-seekable-hls-presentation.md) | A stream plan is also a seekable HLS presentation, cut where every run cuts it | Accepted |
+| [0127](0127-a-library-type-heyarr-does-not-understand-is-retyped-by-its-operator.md) | A library type Heyarr does not understand is retyped by its operator | Accepted |

@@ -15,6 +15,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
+	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/scanner"
 )
 
@@ -248,7 +249,8 @@ func (a *API) createLibrary(w http.ResponseWriter, r *http.Request) {
 // Name is a pointer so a patch that names no field is refused rather than read
 // as "rename to the empty string". It is the only field: content_type cannot be
 // changed in place (it would re-identify every work under the library), and the
-// strict decoder refuses it as an unknown field.
+// strict decoder refuses it as an unknown field. The one exception, a type
+// Heyarr does not understand, is its own action: retypeLibrary.
 type updateLibraryRequest struct {
 	Name *string `json:"name"`
 }
@@ -323,6 +325,64 @@ func (a *API) updateLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.write(w, r, http.StatusOK, lib)
+}
+
+// retypeLibraryRequest is the POST /libraries/{id}/retype body.
+type retypeLibraryRequest struct {
+	ContentType string `json:"content_type"`
+}
+
+// retypeLibrary corrects a library whose stored content type Heyarr does not
+// understand to one it does (#896, ADR-0127). The rules are the catalog's
+// (catalog.RetypeLibrary); this maps them onto statuses:
+//
+//   - a target that is not a known type is a 400, worded as createLibrary
+//     words it;
+//   - a library whose type is already known, and different, is a 409 — that is
+//     a real content-type change, which nothing does in place;
+//   - a library that already has the target type is a 200 with no event, so a
+//     second run of the same command is not an error.
+func (a *API) retypeLibrary(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	var body retypeLibraryRequest
+	if !decodeOr400(w, r, &body) {
+		return
+	}
+	if err := required("content_type", body.ContentType); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	}
+	contentType := strings.TrimSpace(body.ContentType)
+
+	if _, err := a.catalog.RetypeLibrary(r.Context(), id, contentType); err != nil {
+		a.failRetype(w, r, contentType, err)
+		return
+	}
+
+	lib, err := a.loadLibrary(r.Context(), id)
+	if err != nil {
+		a.fail(w, r, "library", err)
+		return
+	}
+	a.write(w, r, http.StatusOK, lib)
+}
+
+// failRetype maps catalog.RetypeLibrary's refusals onto statuses.
+func (a *API) failRetype(w http.ResponseWriter, r *http.Request, contentType string, err error) {
+	var known *catalog.KnownContentTypeError
+	switch {
+	case errors.Is(err, catalog.ErrUnknownContentType):
+		httpapi.Fail(w, r, problem.BadRequest(fmt.Sprintf(
+			"content_type %q is not one Heyarr understands — use one of: %s",
+			contentType, strings.Join(identification.ContentTypes(), ", "))))
+	case errors.As(err, &known):
+		httpapi.Fail(w, r, problem.Conflict(known.Reason()))
+	case errors.Is(err, catalog.ErrNoLibrary):
+		httpapi.Fail(w, r, problem.NotFound("no library with that identifier"))
+	default:
+		a.fail(w, r, "library", err)
+	}
 }
 
 // createRootRequest is the POST /libraries/{id}/roots body.
