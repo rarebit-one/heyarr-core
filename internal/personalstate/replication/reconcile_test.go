@@ -187,6 +187,79 @@ func TestReconcileConvergesATargetThenIsIdempotent(t *testing.T) {
 	}
 }
 
+// flakyPusher is a storePusher whose change pushes start failing after the
+// first n succeed: a transfer cut off part-way.
+type flakyPusher struct {
+	storePusher
+	allow *int
+}
+
+func (p flakyPusher) PushChange(ctx context.Context, t replication.Target, ch protocol.EncryptedChange) error {
+	if *p.allow == 0 {
+		return errDown
+	}
+	*p.allow--
+	return p.storePusher.PushChange(ctx, t, ch)
+}
+
+// TestReconcileNeverLeavesAChildWithoutItsParent: a transfer that fails after
+// one change lands has landed a parent, never a child whose id happens to sort
+// first, and the next cycle completes the target (#682, ADR-0101). Under the old
+// id order the child landed alone, the target offered it as a head, and the
+// parent was never resent.
+func TestReconcileNeverLeavesAChildWithoutItsParent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	local := newStore(t)
+	target := newStore(t)
+	sp, err := local.PutSpace(ctx, mustUUID(t), spaces.KindPersonal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parent, child protocol.EncryptedChange
+	for i := 0; ; i++ {
+		if i == 256 {
+			t.Fatal("no child id sorted before its parent's in 256 tries")
+		}
+		parent, _ = protocol.NewChange(sp.ID, nil, []byte{byte(i), 'p'})
+		child, _ = protocol.NewChange(sp.ID, []string{parent.ChangeID}, []byte{byte(i), 'c'})
+		if child.ChangeID < parent.ChangeID {
+			break
+		}
+	}
+	for _, ch := range []protocol.EncryptedChange{parent, child} {
+		if err := local.PutChange(ctx, ch); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tgt := replication.Target{Peer: mtls.Peer{PeerID: "peer-b", Name: "peer-b"}}
+	allow := 1
+	cut := flakyPusher{storePusher: storePusher{target: target}, allow: &allow}
+	if out := replication.Reconcile(ctx, local, cut, []replication.Target{tgt}, nil, nil); out[0].Err == nil {
+		t.Fatalf("the cut-off transfer reported success: %+v", out[0])
+	}
+	held, err := target.ChangesFor(ctx, sp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(held) != 1 || held[0].ChangeID != parent.ChangeID {
+		t.Fatalf("after the cut the target holds %v, want only the parent %s", held, parent.ChangeID)
+	}
+
+	out := replication.Reconcile(ctx, local, storePusher{target: target}, []replication.Target{tgt}, nil, nil)
+	if out[0].Err != nil || out[0].Pushed != 1 {
+		t.Fatalf("the next cycle = %+v, want the child pushed", out[0])
+	}
+	held, err = target.ChangesFor(ctx, sp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, gap := protocol.HaveAll(held, []string{child.ChangeID}); !ok {
+		t.Fatalf("the target is still missing %s", gap)
+	}
+}
+
 // TestReconcileReplicatesTheLatestSnapshot: a space that carries a snapshot has
 // that snapshot replicated to the target alongside its changes (§44), so a Full
 // Peer holds a bounded snapshot + tail — not just the change log. The snapshot is
