@@ -116,6 +116,9 @@ func (a *Albums) Snapshot() ([]byte, error) {
 // AFTER the snapshot's causal point yields the same set as replaying the whole
 // log, because the map is a semilattice and a snapshot is a partial fold.
 func AlbumsFromSnapshot(b []byte) (*Albums, error) {
+	if err := refuseComposite(b); err != nil {
+		return nil, err
+	}
 	var snap albumsSnapshot
 	if err := json.Unmarshal(b, &snap); err != nil {
 		return nil, fmt.Errorf("crdt: decoding an album snapshot: %w", err)

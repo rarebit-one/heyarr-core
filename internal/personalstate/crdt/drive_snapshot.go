@@ -77,6 +77,9 @@ func (d *Drive) Snapshot() ([]byte, error) {
 // AFTER the snapshot's causal point yields the same drive as replaying the whole
 // log, because the map is a semilattice and a snapshot is a partial fold.
 func DriveFromSnapshot(b []byte) (*Drive, error) {
+	if err := refuseComposite(b); err != nil {
+		return nil, err
+	}
 	var snap driveSnapshot
 	if err := json.Unmarshal(b, &snap); err != nil {
 		return nil, fmt.Errorf("crdt: decoding a drive snapshot: %w", err)
