@@ -95,7 +95,7 @@ func (pw *PersonalWorker) Run(ctx context.Context) error {
 	startupCtx, cancelStartup := context.WithTimeout(context.WithoutCancel(ctx), schemaWait+time.Minute)
 	defer cancelStartup()
 
-	db, err := sqlite.Open(startupCtx, sqlite.Options{Path: pw.cfg.Database.Path, Logger: pw.log})
+	db, err := sqlite.Open(startupCtx, databaseOptions(pw.cfg.Database.Path, pw.log))
 	if err != nil {
 		return fmt.Errorf("worker: opening database: %w", err)
 	}

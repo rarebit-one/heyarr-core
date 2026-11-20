@@ -99,6 +99,13 @@ const startupTimeout = 5 * time.Minute
 // server's, which is the one that says what was still in flight.
 const shutdownTimeout = 10 * time.Second
 
+// databaseOptions opens the database as a long-running role: a write stuck
+// behind another process's lock fails after ServiceWriteWait, not the one
+// minute a one-shot command waits (#910).
+func (c *Controller) databaseOptions() sqlite.Options {
+	return sqlite.Options{Path: c.cfg.Database.Path, Logger: c.log, WriteWait: sqlite.ServiceWriteWait}
+}
+
 // Run blocks until ctx is cancelled, then shuts down cleanly.
 //
 // Milestone 1 fills this in: the resource API (M1-14), the job scheduler
@@ -119,7 +126,7 @@ func (c *Controller) Run(ctx context.Context) error {
 	// The controller is the only role that opens the database for writing: it
 	// owns coordinated mutable state (§7, ADR-0003). Workers and peers reach it
 	// through the controller, never by opening the file themselves.
-	db, err := sqlite.Open(startupCtx, sqlite.Options{Path: c.cfg.Database.Path, Logger: c.log})
+	db, err := sqlite.Open(startupCtx, c.databaseOptions())
 	if err != nil {
 		return fmt.Errorf("controller: opening database: %w", err)
 	}

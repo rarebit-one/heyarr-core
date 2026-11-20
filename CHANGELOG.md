@@ -372,6 +372,12 @@ stable.
   beginning a transaction is retried, because nothing has run yet at that
   point. Marking and clearing grace windows now commit in batches of 500, so a
   sweep over a whole library no longer holds the lock for that long itself.
+- **A running server waits 15 seconds for another process's write lock, not
+  a minute** (#910). The one-minute wait above is for one-shot commands
+  (`gc`, `fsck`, `backup`, `vault purge` …), which have nothing better to do.
+  The controller, the workers and the Mnemosyne server now give up after 15 s,
+  so a write stuck behind a lock that is not coming back fails, and its job is
+  retried, instead of every other write in the server queueing behind it.
 - **fsck no longer reports a released vault blob with no bytes as damage**
   (#910). A released blob that nothing references, and whose bytes are gone,
   is now the non-damage finding `released_missing`. Once its grace window has

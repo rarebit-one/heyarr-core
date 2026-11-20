@@ -56,6 +56,10 @@ type Options struct {
 	// either side can hold the lock for longer than BusyTimeout. Beginning a
 	// transaction is the one point where retrying is always safe, because
 	// nothing has run yet.
+	//
+	// The default, CommandWriteWait, suits a one-shot command. A long-running
+	// role passes ServiceWriteWait: it would rather fail a write and let the
+	// job be retried than stall its writer for a minute behind a command.
 	WriteWait time.Duration
 	Logger    *slog.Logger
 }
@@ -63,7 +67,21 @@ type Options struct {
 const (
 	defaultReadPoolSize = 8
 	defaultBusyTimeout  = 5 * time.Second
-	defaultWriteWait    = time.Minute
+)
+
+// How long InTx waits out another process's write lock (#910).
+const (
+	// CommandWriteWait is the default, for a one-shot host-administration
+	// command (gc, fsck, backup, purge …) opened beside a running server. A
+	// command has nothing better to do than wait, and dying partway through a
+	// long sweep is the expensive outcome.
+	CommandWriteWait = time.Minute
+	// ServiceWriteWait is for a long-running role (the controller, a worker,
+	// the Mnemosyne server). It still outlasts a command's short transactions,
+	// but a writer stuck behind a lock that is not coming back fails while the
+	// failure is still recognisable as contention, rather than queueing every
+	// other write in the process behind it for a minute.
+	ServiceWriteWait = 15 * time.Second
 )
 
 // Open prepares both pools and verifies the pragmas actually took effect.
@@ -90,7 +108,7 @@ func Open(ctx context.Context, opts Options) (*DB, error) {
 		opts.BusyTimeout = defaultBusyTimeout
 	}
 	if opts.WriteWait <= 0 {
-		opts.WriteWait = defaultWriteWait
+		opts.WriteWait = CommandWriteWait
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
@@ -236,6 +254,10 @@ func (db *DB) Reader() *sql.DB { return db.reader }
 
 // Path is the database file's location.
 func (db *DB) Path() string { return db.path }
+
+// WriteWait is how long InTx waits out another process's write lock: the
+// Options value, or CommandWriteWait when that was zero.
+func (db *DB) WriteWait() time.Duration { return db.writeWait }
 
 // Close shuts both pools down, leaving the database file self-contained.
 //
