@@ -195,6 +195,58 @@ func TestClientProfileRendersAsADeviceProfile(t *testing.T) {
 	}
 }
 
+// A client's height cap is a limit to the planner as it is to the leg (#892).
+// Its declaration states a height and never a width, and the planner used to
+// wait for the pair: the leg scaled a 1920x804 film to 720 lines while the
+// plan said DIRECT with no reasons. Over the cap is TRANSCODE for
+// resolution_too_high on both sides; at or under it is DIRECT on both.
+func TestTheClientHeightCapIsADecisionAsWellAsALeg(t *testing.T) {
+	client := playback.ClientProfile{
+		Containers: []string{"mp4", "mkv"}, VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac"},
+	}
+	for _, tc := range []struct {
+		name      string
+		maxHeight int
+		height    int
+		want      playback.Decision
+	}{
+		{"over the cap", 720, 804, playback.DecisionTranscode},
+		{"at the cap", 804, 804, playback.DecisionDirect},
+		{"under the cap", 1080, 804, playback.DecisionDirect},
+		{"no cap stated", 0, 804, playback.DecisionDirect},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := client
+			c.MaxHeight = tc.maxHeight
+			media := playback.MediaProfile{
+				Known: true, Container: "matroska,webm", VideoCodec: "h264", AudioCodec: "aac",
+				Width: 1920, Height: tc.height,
+			}
+			plan := playback.Choose(media, c.DeviceProfile(), []playback.Replica{{PeerID: "p", Local: true}})
+			leg := playback.Negotiate(media, c)
+
+			if plan.Decision != tc.want {
+				t.Fatalf("decision = %s (%+v), want %s", plan.Decision, plan.Reasons, tc.want)
+			}
+			_, planScales := plan.Reason(playback.ReasonResolutionTooHigh)
+			legScales := leg.TargetHeight > 0
+			if planScales != legScales {
+				t.Errorf("the plan says resolution_too_high=%v and the leg scales=%v (target %d) — they disagree",
+					planScales, legScales, leg.TargetHeight)
+			}
+			if (tc.want == playback.DecisionDirect) != leg.Direct() {
+				t.Errorf("decision %s, leg %s — they disagree", plan.Decision, leg.Mode)
+			}
+			if tc.want == playback.DecisionTranscode {
+				r, _ := plan.Reason(playback.ReasonResolutionTooHigh)
+				if !strings.Contains(r.Detail, "max height 720") {
+					t.Errorf("reason detail %q does not name the cap", r.Detail)
+				}
+			}
+		})
+	}
+}
+
 // A re-encode decodes the base layer and writes eight-bit H.264, so what the
 // source's samples mean decides what else the re-encode must do (#886). A
 // copy is never touched: the client gets the source's own colour.
