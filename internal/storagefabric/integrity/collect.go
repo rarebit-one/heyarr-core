@@ -78,6 +78,11 @@ type Collection struct {
 	Waiting []Candidate `json:"waiting"`
 	// Reclaimed are blobs whose bytes were freed, or would have been.
 	Reclaimed []Candidate `json:"reclaimed"`
+	// Reconciled are released blobs whose bytes were already gone from the
+	// store, so only their row was dropped, or would have been (#910). They
+	// are kept apart from Reclaimed because this sweep freed none of their
+	// bytes, and counting them there would overstate what it did.
+	Reconciled []Candidate `json:"reconciled"`
 	// Spared are blobs the durability precondition declined to reclaim, each
 	// with the reason it declined (ADR-0018, M4-12).
 	//
@@ -180,7 +185,7 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 	// handle only one of them.
 	out := Collection{
 		DryRun: !opts.Apply, Grace: Window(grace), StartedAt: now,
-		Marked: []Candidate{}, Waiting: []Candidate{}, Reclaimed: []Candidate{},
+		Marked: []Candidate{}, Waiting: []Candidate{}, Reclaimed: []Candidate{}, Reconciled: []Candidate{},
 		Untracked: []Candidate{}, TempRemoved: []TempRemoval{},
 		Spared: []Sparing{}, Refusals: []SweepRefusal{}, UntrackedSpared: []Sparing{},
 		PinnedUntracked: []Candidate{},
@@ -243,6 +248,13 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 		if err := ctx.Err(); err != nil {
 			return Collection{}, err
 		}
+		done, err := c.reconcileLeftover(ctx, &out, gate, b, now, grace, opts.Apply)
+		if err != nil {
+			return Collection{}, err
+		}
+		if done {
+			continue
+		}
 		ev, spared, err := c.establish(ctx, gate, b, now, opts.Apply)
 		if err != nil {
 			return Collection{}, err
@@ -289,11 +301,67 @@ func (c *Collector) Collect(ctx context.Context, opts CollectOptions) (Collectio
 	c.opts.Logger.Info("garbage collection swept",
 		"dry_run", out.DryRun, "considered", out.Considered, "referenced", out.Referenced,
 		"marked", len(out.Marked), "waiting", len(out.Waiting), "reclaimed", len(out.Reclaimed),
+		"reconciled", len(out.Reconciled),
 		"untracked", len(out.Untracked), "pinned_untracked", len(out.PinnedUntracked),
 		"temp_removed", len(out.TempRemoved),
 		"spared", len(out.Spared), "untracked_spared", len(out.UntrackedSpared),
 		"refusals", len(out.Refusals), "bytes_reclaimed", out.BytesReclaimed)
 	return out, nil
+}
+
+// reconcileLeftover drops the row of a released blob whose bytes are already
+// gone from the store, and reports whether it handled b (#910).
+//
+// That state is what a reclaim interrupted between the unlink and the row
+// leaves behind — the order reclaim below avoids, but older nodes carry the
+// rows — and before this nothing could clear it: fsck reported it as loss on
+// every run, and on the media profile the last-copy rule spared the row forever
+// because no other peer claims bytes nobody wants. Neither concern applies to a
+// row with no bytes behind it. The release is the record that nothing wants
+// them, the grace window has passed, and dropping the row unlinks nothing, so
+// HonourReleases (which governs deleting a last COPY) is not consulted.
+//
+// It still goes through the ordinary reclaim, with release evidence, so the
+// catalog's own checks run in the delete transaction: a pin or placement that
+// came back since the sweep read the blob keeps the row (ErrWantedAgain). And
+// the sweep-wide refusals still apply, as they do to every delete: a node cut
+// off from its controller changes nothing (§53).
+func (c *Collector) reconcileLeftover(ctx context.Context, out *Collection, g gate,
+	b Blob, now time.Time, grace time.Duration, apply bool,
+) (bool, error) {
+	if !b.unwantedRelease() || len(g.refusals) > 0 {
+		return false, nil
+	}
+	if _, err := c.opts.Store.Stat(ctx, b.Hash); !errors.Is(err, cas.ErrNotFound) {
+		// Present, or unreadable. Unreadable is not evidence of absence, and
+		// the ordinary path decides what to do with bytes that are there.
+		return false, nil
+	}
+	if apply {
+		ev := Evidence{
+			BlobHash: b.Hash, Size: b.Size, Basis: BasisReleased, RecordedAt: now,
+			ReleasedAt: b.ReleasedAt, UnreferencedSince: b.UnreferencedSince,
+			Detail: fmt.Sprintf("released (%s) at %s, and its bytes were already gone from this "+
+				"store: only the row is dropped (#910)",
+				b.ReleaseCause, b.ReleasedAt.UTC().Format(time.RFC3339Nano)),
+		}
+		if err := c.opts.Catalog.RecordDurability(ctx, ev); err != nil {
+			return false, err
+		}
+		if err := c.reclaimTracked(ctx, b.Hash, b.Size, true, now); err != nil {
+			if errors.Is(err, ErrWantedAgain) {
+				out.Spared = append(out.Spared, Sparing{
+					Hash: b.Hash.String(), Size: b.Size, Reason: ReasonWantedAgain,
+					Detail: "released when the sweep read it, and wanted again before its row " +
+						"was dropped; the row stays (ADR-0114, #779)",
+				})
+				return true, nil
+			}
+			return false, err
+		}
+	}
+	out.Reconciled = append(out.Reconciled, candidate(b, b.UnreferencedSince, grace))
+	return true, nil
 }
 
 // reclaim removes the catalog row first and the bytes second.

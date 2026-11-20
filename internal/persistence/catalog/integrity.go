@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -363,6 +364,15 @@ func (c *Catalog) MarkMissing(ctx context.Context, h hashing.Hash, at time.Time)
 	return nil
 }
 
+// sweepBatch bounds how many blobs one grace-window transaction touches (#910).
+//
+// A sweep can mark or clear a whole library at once, and as one transaction
+// that held the write lock for as long as it took — long enough for a server
+// running beside `heyarr gc`, or the gc beside it, to give up waiting. Each
+// row's update is independent and idempotent, so committing in batches changes
+// nothing a re-run would not already converge on.
+const sweepBatch = 500
+
 // MarkUnreferenced starts the grace window for blobs with no referencing asset.
 //
 // It deliberately writes nothing but a timestamp. This is the pass that decides
@@ -373,19 +383,24 @@ func (c *Catalog) MarkUnreferenced(ctx context.Context, hashes []hashing.Hash, a
 		return nil
 	}
 	stamp := at.UTC().Format(timestampFormat)
-	return c.db.InTx(ctx, func(tx *sql.Tx) error {
-		for _, h := range hashes {
-			// The WHERE clause is what makes a re-run idempotent: a second
-			// sweep must not restart a window that is already half spent, and
-			// must not shorten one either.
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE blobs SET unreferenced_since = ? WHERE hash = ? AND unreferenced_since IS NULL`,
-				stamp, h.String()); err != nil {
-				return fmt.Errorf("catalog: marking %s unreferenced: %w", h, err)
+	for batch := range slices.Chunk(hashes, sweepBatch) {
+		if err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+			for _, h := range batch {
+				// The WHERE clause is what makes a re-run idempotent: a second
+				// sweep must not restart a window that is already half spent,
+				// and must not shorten one either.
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE blobs SET unreferenced_since = ? WHERE hash = ? AND unreferenced_since IS NULL`,
+					stamp, h.String()); err != nil {
+					return fmt.Errorf("catalog: marking %s unreferenced: %w", h, err)
+				}
 			}
+			return nil
+		}); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // ClearUnreferenced ends the grace window for blobs that regained a reference,
@@ -394,27 +409,29 @@ func (c *Catalog) ClearUnreferenced(ctx context.Context, hashes []hashing.Hash) 
 	if len(hashes) == 0 {
 		return nil
 	}
-	var pending []events.Event
-	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
-		pending = nil
-		for _, h := range hashes {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE blobs SET unreferenced_since = NULL WHERE hash = ?`, h.String()); err != nil {
-				return fmt.Errorf("catalog: clearing the grace window on %s: %w", h, err)
+	for batch := range slices.Chunk(hashes, sweepBatch) {
+		var pending []events.Event
+		err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+			pending = nil
+			for _, h := range batch {
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE blobs SET unreferenced_since = NULL WHERE hash = ?`, h.String()); err != nil {
+					return fmt.Errorf("catalog: clearing the grace window on %s: %w", h, err)
+				}
+				evs, err := c.clearRelease(ctx, tx, h.String(), wantedByReference)
+				if err != nil {
+					return err
+				}
+				pending = append(pending, evs...)
 			}
-			evs, err := c.clearRelease(ctx, tx, h.String(), wantedByReference)
-			if err != nil {
-				return err
-			}
-			pending = append(pending, evs...)
+			return nil
+		})
+		if err != nil {
+			return err
 		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if len(pending) > 0 {
-		c.events.Publish(pending...)
+		if len(pending) > 0 {
+			c.events.Publish(pending...)
+		}
 	}
 	return nil
 }

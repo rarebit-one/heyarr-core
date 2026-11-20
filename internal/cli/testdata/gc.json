@@ -13,6 +13,7 @@
   ],
   "waiting": [],
   "reclaimed": [],
+  "reconciled": [],
   "spared": [],
   "refusals": [],
   "untracked": [],

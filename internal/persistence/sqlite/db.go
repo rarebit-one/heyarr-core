@@ -16,7 +16,8 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite" // pure-Go driver; see ADR-0004
+	msqlite "modernc.org/sqlite" // pure-Go driver; see ADR-0004
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // DB is the controller database. It deliberately exposes two pools:
@@ -28,10 +29,11 @@ import (
 //	Reader — many connections. WAL lets readers proceed while a write is in
 //	         flight, so read concurrency costs nothing.
 type DB struct {
-	writer *sql.DB
-	reader *sql.DB
-	path   string
-	log    *slog.Logger
+	writer    *sql.DB
+	reader    *sql.DB
+	path      string
+	log       *slog.Logger
+	writeWait time.Duration
 }
 
 // Options configure the connection policy.
@@ -44,12 +46,24 @@ type Options struct {
 	// BusyTimeout is how long SQLite waits for a lock before returning
 	// SQLITE_BUSY. Zero means a sensible default.
 	BusyTimeout time.Duration
-	Logger      *slog.Logger
+	// WriteWait bounds how long InTx keeps retrying to begin a write
+	// transaction while ANOTHER PROCESS holds the write lock (#910). Zero
+	// means a sensible default.
+	//
+	// The single-writer pool makes contention inside one process a queue in
+	// Go, but it cannot reach across processes: a host-administration command
+	// such as `heyarr gc` opens the database beside a running server, and
+	// either side can hold the lock for longer than BusyTimeout. Beginning a
+	// transaction is the one point where retrying is always safe, because
+	// nothing has run yet.
+	WriteWait time.Duration
+	Logger    *slog.Logger
 }
 
 const (
 	defaultReadPoolSize = 8
 	defaultBusyTimeout  = 5 * time.Second
+	defaultWriteWait    = time.Minute
 )
 
 // Open prepares both pools and verifies the pragmas actually took effect.
@@ -75,6 +89,9 @@ func Open(ctx context.Context, opts Options) (*DB, error) {
 	if opts.BusyTimeout <= 0 {
 		opts.BusyTimeout = defaultBusyTimeout
 	}
+	if opts.WriteWait <= 0 {
+		opts.WriteWait = defaultWriteWait
+	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
 	}
@@ -98,7 +115,7 @@ func Open(ctx context.Context, opts Options) (*DB, error) {
 		return nil, fmt.Errorf("sqlite: opening reader: %w", err)
 	}
 
-	db := &DB{writer: writer, reader: reader, path: opts.Path, log: opts.Logger}
+	db := &DB{writer: writer, reader: reader, path: opts.Path, log: opts.Logger, writeWait: opts.WriteWait}
 	if err := db.verifyPragmas(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -249,8 +266,12 @@ func (db *DB) Close() error {
 // InTx runs fn inside a write transaction, committing on success and rolling
 // back on error or panic. A panic is re-raised after the rollback: swallowing
 // it would leave the caller believing the work succeeded.
+//
+// Beginning the transaction waits out another process's write lock (see
+// begin); nothing after that is retried, because fn may have done something
+// outside the database that a second run would repeat.
 func (db *DB) InTx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
-	tx, err := db.writer.BeginTx(ctx, nil)
+	tx, err := db.begin(ctx)
 	if err != nil {
 		return fmt.Errorf("sqlite: beginning transaction: %w", err)
 	}
@@ -272,6 +293,49 @@ func (db *DB) InTx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 		return fmt.Errorf("sqlite: committing: %w", err)
 	}
 	return nil
+}
+
+// begin starts a write transaction, retrying while another process holds the
+// write lock, for at most WriteWait (#910).
+//
+// Each attempt already waits BusyTimeout inside SQLite (the writer takes its
+// lock up front, _txlock=immediate), so a retry here means a write transaction
+// in some other process outlived that. A garbage collection sweep beside a
+// running server makes tens of thousands of short transactions over an hour,
+// and one long write on the other side was enough to kill it partway.
+//
+// Only SQLITE_BUSY is retried, and only here: BEGIN failing means nothing ran,
+// so trying again cannot repeat anything. Any other error is returned at once.
+func (db *DB) begin(ctx context.Context) (*sql.Tx, error) {
+	deadline := time.Now().Add(db.writeWait)
+	backoff := 10 * time.Millisecond
+	for attempt := 1; ; attempt++ {
+		tx, err := db.writer.BeginTx(ctx, nil)
+		if err == nil || !IsBusy(err) {
+			return tx, err
+		}
+		if !time.Now().Before(deadline) {
+			return nil, fmt.Errorf("another process held the write lock for longer than %s "+
+				"(%d attempts): %w", db.writeWait, attempt, err)
+		}
+		db.log.Warn("sqlite: waiting for another process's write lock",
+			"attempt", attempt, "retry_in", backoff, "error", err)
+		select {
+		case <-ctx.Done():
+			return nil, errors.Join(ctx.Err(), err)
+		case <-time.After(backoff):
+		}
+		if backoff < time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+// IsBusy reports whether err is SQLite saying the database is locked, in any
+// of its extended forms (SQLITE_BUSY_RECOVERY, _SNAPSHOT, _TIMEOUT).
+func IsBusy(err error) bool {
+	var e *msqlite.Error
+	return errors.As(err, &e) && e.Code()&0xff == sqlite3.SQLITE_BUSY
 }
 
 // DataDirFor returns the conventional database path beneath a data directory.
