@@ -57,6 +57,11 @@ type DesiredItem struct {
 	Monitor          bool   `json:"monitor"`
 	Reason           string `json:"reason,omitempty"`
 
+	// OriginSite is the sibling site whose choice of release created this
+	// want through fan-out (ADR-0119, #799). Absent for a want this site
+	// created itself. GET /desired/{id}/acquisition says what became of it.
+	OriginSite string `json:"origin_site,omitempty"`
+
 	// Acquisition is where this want has got to (§64).
 	//
 	// It carries the derived §64 NAME and both of §56's axes. Showing only the
@@ -185,25 +190,28 @@ type UpdateDesiredRequest struct {
 // nothing about its state rather than hiding the want.
 const desiredColumns = `d.id, d.scope, d.work_id, d.edition_id, d.item_id, d.quality_profile_id,
 	d.monitor, d.reason, d.created_at, d.updated_at, ` + acquisitionSelect +
-	`, acq.bytes_total, acq.bytes_done`
+	`, acq.bytes_total, acq.bytes_done, fo.origin_site`
 
 // acquisition_state carries the derived §64 axes; the acquisitions row carries
-// the in-flight transfer's byte counts. Both are one-per-want (desired_item_id
-// UNIQUE on acquisitions), so a LEFT JOIN of each keeps the page one query.
+// the in-flight transfer's byte counts; fan_out_wants names the sibling site
+// whose choice created the want. All are one-per-want (desired_item_id UNIQUE
+// on acquisitions, the key of the other two), so a LEFT JOIN of each keeps the
+// page one query.
 const desiredFrom = ` FROM desired_items d
 	LEFT JOIN acquisition_state a ON a.desired_item_id = d.id
-	LEFT JOIN acquisitions acq ON acq.desired_item_id = d.id`
+	LEFT JOIN acquisitions acq ON acq.desired_item_id = d.id
+	LEFT JOIN fan_out_wants fo ON fo.desired_item_id = d.id`
 
 func scanDesiredItem(row interface{ Scan(...any) error }) (DesiredItem, error) {
 	var d DesiredItem
-	var edition, item sql.NullString
+	var edition, item, origin sql.NullString
 	var monitor int
 	var created, updated string
 	var phase, content, placement, detail sql.NullString
 	var managed, bytesTotal, bytesDone sql.NullInt64
 	if err := row.Scan(&d.ID, &d.Scope, &d.WorkID, &edition, &item, &d.QualityProfileID,
 		&monitor, &d.Reason, &created, &updated,
-		&phase, &managed, &content, &placement, &detail, &bytesTotal, &bytesDone); err != nil {
+		&phase, &managed, &content, &placement, &detail, &bytesTotal, &bytesDone, &origin); err != nil {
 		return DesiredItem{}, err
 	}
 	d.Acquisition = scanAcquisitionView(phase, managed, content, placement, detail, bytesTotal, bytesDone)
@@ -213,6 +221,7 @@ func scanDesiredItem(row interface{ Scan(...any) error }) (DesiredItem, error) {
 	if item.Valid {
 		d.ItemID = item.String
 	}
+	d.OriginSite = origin.String
 	d.Monitor = monitor == 1
 	d.CreatedAt = parseTime(created)
 	d.UpdatedAt = parseTime(updated)
@@ -268,6 +277,20 @@ func (a *API) listDesired(w http.ResponseWriter, r *http.Request) {
 	if profile := r.URL.Query().Get("quality_profile_id"); profile != "" {
 		where = append(where, "d.quality_profile_id = ?")
 		args = append(args, profile)
+	}
+	// Fan-out (ADR-0119, #799): the wants a sibling's choice created, all of
+	// them or one site's.
+	if v, err := oneOf(r, "fan_out", "true", "false"); err != nil {
+		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	} else if v == "true" {
+		where = append(where, "fo.desired_item_id IS NOT NULL")
+	} else if v == "false" {
+		where = append(where, "fo.desired_item_id IS NULL")
+	}
+	if site := r.URL.Query().Get("origin_site"); site != "" {
+		where = append(where, "fo.origin_site = ?")
+		args = append(args, site)
 	}
 	// upgradable is the listing question §71's get_upgrade_candidates asks:
 	// which wants are in a state where an upgrade COULD happen.

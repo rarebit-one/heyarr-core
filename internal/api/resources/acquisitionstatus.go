@@ -3,7 +3,10 @@ package resources
 import (
 	"context"
 	"errors"
+	"net/http"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
@@ -206,4 +209,15 @@ func (a *API) AcquisitionStatus(ctx context.Context, id string) (AcquisitionStat
 		}
 	}
 	return out, nil
+}
+
+// getAcquisitionStatus is GET /api/v1/desired/{id}/acquisition — a shell over
+// AcquisitionStatus, the same read get_acquisition_status gives an agent.
+func (a *API) getAcquisitionStatus(w http.ResponseWriter, r *http.Request) {
+	out, err := a.AcquisitionStatus(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		a.fail(w, r, "desired item", err)
+		return
+	}
+	a.write(w, r, http.StatusOK, out)
 }

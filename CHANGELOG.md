@@ -10,6 +10,15 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **A want's fan-out origin is on the HTTP API** (#799, ADR-0119). A want a
+  sibling site's choice of release created carries `origin_site`, and
+  `GET /api/v1/desired` filters on `fan_out=true|false` and `origin_site=`
+  (`heyarr desired list --origin-site`). New
+  `GET /api/v1/desired/{id}/acquisition` is the HTTP half of MCP
+  `get_acquisition_status`: the pipeline position, the transfer in flight,
+  and for a fan-out want the `fan_out` block, saying what this site did with
+  the sibling's acquire op (`applied`, `held`, `deferred`, `no_site_source` …),
+  whether it reported it unsourced, and the peer-pull outcome of any hold.
 - **A stream plan is also a seekable HLS presentation** (#908, ADR-0126).
   Beside `url`, a `mode: stream` plan now carries `hls_url`
   (`/render/hls/{capability}/index.m3u8`, `hls_mime`
