@@ -94,10 +94,16 @@ func TestCompositeParityVectors(t *testing.T) {
 		states   map[string]string
 		verbatim []string
 	}{
-		{"a-drive-writer-carries-albums-and-policy-verbatim", map[string]string{crdt.KindDrive: drive},
-			[]string{policy, futureOp, albumCreate}},
-		{"a-writer-that-folds-drive-and-albums", map[string]string{crdt.KindDrive: drive, crdt.KindAlbum: albums},
-			[]string{newerKind, policy}},
+		{
+			"a-drive-writer-carries-albums-and-policy-verbatim",
+			map[string]string{crdt.KindDrive: drive},
+			[]string{policy, futureOp, albumCreate},
+		},
+		{
+			"a-writer-that-folds-drive-and-albums",
+			map[string]string{crdt.KindDrive: drive, crdt.KindAlbum: albums},
+			[]string{newerKind, policy},
+		},
 		{"nothing-left-unfolded", map[string]string{crdt.KindDrive: drive}, []string{}},
 		{"only-verbatim", map[string]string{}, []string{futureOp, policy}},
 	}
