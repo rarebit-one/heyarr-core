@@ -134,3 +134,71 @@ func TestGetAcquisitionStatusOfAFanOutWant(t *testing.T) {
 		t.Errorf("fan_out = %+v", *fo)
 	}
 }
+
+// get_acquisition_status at the origin carries `published` (#799): the acquire
+// op this site signed for the want and the sibling sites that reported they
+// could not source it.
+func TestGetAcquisitionStatusAtTheOrigin(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, false)
+	id := h.wantOne("")
+
+	selfPub, selfPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibPub, sibPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	stamp := at.Format(time.RFC3339)
+	h.exec(`UPDATE peers SET public_key = ? WHERE is_self = 1`, []byte(selfPub))
+	h.exec(`INSERT INTO peers (id, name, site, mode, is_self, public_key, created_at, enrolled_at)
+		VALUES ('sibling-peer', 'peer-b', 'site-b', 'partial', 0, ?, ?, ?)`, []byte(sibPub), stamp, stamp)
+
+	log := func(tok string, err error, kind, prev string) catalogop.Op {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		op, err := catalogop.Verify(tok)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.exec(`INSERT INTO catalog_ops (op_hash, content_type, work_key, op, signer, prev, iat, token, received_at)
+			VALUES (?, 'movie', 'movie:arrival:2016', ?, ?, ?, ?, ?, ?)`, op.Hash, kind, op.By, prev, stamp, op.Token, stamp)
+		return op
+	}
+	tok, err := catalogop.SignAcquire(selfPriv, "movie", "movie:arrival:2016", catalogop.Acquire{
+		Scope: catalogop.ScopeWork, Aspect: catalogop.AspectPrimary, Profile: "living-room",
+		Infohash: "0123456789abcdef0123456789abcdef01234567", Title: "Arrival 2016 2160p",
+		WorkTitle: "Arrival", Year: 2016, SelectedAt: at, Site: "site-a",
+	}, nil, at)
+	acq := log(tok, err, "acquire", "[]")
+	tok, err = catalogop.SignUnsourced(sibPriv, "movie", "movie:arrival:2016",
+		catalogop.Unsourced{Acquire: acq.Hash, Site: "site-b"}, []string{acq.Hash}, at)
+	log(tok, err, "unsourced", `["`+acq.Hash+`"]`)
+
+	var out struct {
+		FanOut    *struct{} `json:"fan_out"`
+		Published *struct {
+			OpHash      string `json:"op_hash"`
+			ReleaseName string `json:"release_name"`
+			UnsourcedBy []struct {
+				Site string `json:"site"`
+			} `json:"unsourced_by"`
+		} `json:"published"`
+	}
+	h.call("", "get_acquisition_status", `{"desired_item_id":"`+id+`"}`).structured(t, &out)
+	if out.FanOut != nil {
+		t.Error("the origin's own want reported a fan_out block")
+	}
+	if out.Published == nil {
+		t.Fatal("a want this site published has no published block")
+	}
+	if p := out.Published; p.OpHash != acq.Hash || p.ReleaseName != "Arrival 2016 2160p" ||
+		len(p.UnsourcedBy) != 1 || p.UnsourcedBy[0].Site != "site-b" {
+		t.Errorf("published = %+v", *p)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,5 +187,90 @@ func TestListFanOutShowsOutcomesWithNoWant(t *testing.T) {
 	}
 	if fo.OpHash != applied.Hash || fo.Site != "north" || fo.Outcome != catalog.FanOutApplied || fo.Reported {
 		t.Errorf("FanOutStatusFor = %+v", fo)
+	}
+}
+
+// TestPublishedForShowsTheOriginsSide (#799): at the origin, a want shows the
+// newest acquire op this node signed for it, the current siblings that
+// reported it unsourced (a stranger's report is not one), and the holds this
+// node published for the work. A want this node published nothing for has no
+// such side.
+func TestPublishedForShowsTheOriginsSide(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	if _, found, err := h.cat.PublishedFor(ctx, h.want); err != nil || found {
+		t.Fatalf("before publishing: found %v, err %v; want not found", found, err)
+	}
+
+	selfPub, selfPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.exec(t, `INSERT OR IGNORE INTO peers (id, name, site, mode, is_self, public_key, created_at, enrolled_at)
+		VALUES ('self-peer', 'self', 'home', 'full', 1, ?, ?, ?)`, []byte(selfPub), stamp, stamp)
+	h.exec(t, `UPDATE peers SET public_key = ? WHERE is_self = 1`, []byte(selfPub))
+	sibPub, sibPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.exec(t, `INSERT INTO peers (id, name, site, mode, is_self, public_key, created_at, enrolled_at)
+		VALUES (?, 'sibling', 'site-b', 'partial', 0, ?, ?, ?)`, remotePeer, []byte(sibPub), stamp, stamp)
+	_, strangerPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign := func(tok string, err error) catalogop.Op {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		op, err := catalogop.Verify(tok)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return op
+	}
+
+	older := arrivalAcquire()
+	older.SelectedAt = fanOutAt.Add(-time.Hour)
+	older.Infohash = "3333333333333333333333333333333333333333"
+	newer := arrivalAcquire()
+	newer.Site = "home"
+	subtitle := arrivalAcquire()
+	subtitle.Scope, subtitle.Aspect = catalogop.ScopeEditionPrefix+"default", "subtitle:fr"
+	oldOp := sign(catalogop.SignAcquire(selfPriv, "movie", "movie:arrival:2016", older, nil, fanOutAt))
+	newOp := sign(catalogop.SignAcquire(selfPriv, "movie", "movie:arrival:2016", newer, nil, fanOutAt))
+	subOp := sign(catalogop.SignAcquire(selfPriv, "movie", "movie:arrival:2016", subtitle, nil, fanOutAt))
+	for _, op := range []catalogop.Op{oldOp, newOp, subOp} {
+		h.logOp(t, op, "acquire", "[]")
+	}
+	report := sign(catalogop.SignUnsourced(sibPriv, "movie", "movie:arrival:2016",
+		catalogop.Unsourced{Acquire: newOp.Hash, Site: "site-b"}, []string{newOp.Hash}, fanOutAt))
+	stranger := sign(catalogop.SignUnsourced(strangerPriv, "movie", "movie:arrival:2016",
+		catalogop.Unsourced{Acquire: newOp.Hash, Site: "elsewhere"}, []string{newOp.Hash}, fanOutAt))
+	for _, op := range []catalogop.Op{report, stranger} {
+		h.logOp(t, op, "unsourced", `["`+newOp.Hash+`"]`)
+	}
+	blob := "blake3:" + strings.Repeat("ab", 32)
+	hold := sign(catalogop.SignHold(selfPriv, "movie", "movie:arrival:2016", catalogop.Hold{
+		Scope: catalogop.ScopeEditionPrefix + "default", Blob: blob, Size: 12, Path: "Arrival (2016)/Arrival.mkv",
+		Role: "primary", WorkTitle: "Arrival", Year: 2016, Library: "films", Site: "home", HeldAt: fanOutAt,
+	}, []string{newOp.Hash}, fanOutAt))
+	h.logOp(t, hold, "hold", `["`+newOp.Hash+`"]`)
+
+	got, found, err := h.cat.PublishedFor(ctx, h.want)
+	if err != nil || !found {
+		t.Fatalf("PublishedFor = found %v, err %v", found, err)
+	}
+	if got.OpHash != newOp.Hash || got.Infohash != newer.Infohash || got.ReleaseTitle != newer.Title ||
+		got.Scope != catalogop.ScopeWork || got.Aspect != catalogop.AspectPrimary || !got.SelectedAt.Equal(fanOutAt) {
+		t.Errorf("published = %+v, want the newer primary acquire %s", got, newOp.Hash)
+	}
+	if len(got.Unsourced) != 1 || got.Unsourced[0].Site != "site-b" || got.Unsourced[0].OpHash != report.Hash {
+		t.Errorf("unsourced = %+v, want site-b's report only", got.Unsourced)
+	}
+	if len(got.Holds) != 1 || got.Holds[0].OpHash != hold.Hash || got.Holds[0].Blob != blob {
+		t.Errorf("holds = %+v, want the one hold", got.Holds)
 	}
 }

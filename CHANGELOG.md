@@ -10,6 +10,13 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **The origin sees what came back from its siblings** (#799, ADR-0119).
+  Acquisition status (MCP `get_acquisition_status`,
+  `GET /api/v1/desired/{id}/acquisition`) carries `published` for a want whose
+  release this site published: the acquire op, the sibling sites that reported
+  they could not source it (`unsourced_by`), and the holds this site published
+  for them to pull. Whether a sibling applied the op is recorded only at the
+  sibling; read it there.
 - **What this site did with every sibling's choice of release** (#799,
   ADR-0119). New MCP `list_fan_out` and `GET /api/v1/fan-out` list the acquire
   ops sibling sites published that this site has an outcome for, newest first:

@@ -5459,6 +5459,10 @@ paths:
         reported that to the origin, and the peer-pull outcome of any hold the
         origin published for the work. This is the answer to "why didn't this
         site get X" without SQL (#799).
+
+        A want whose release this site published to its siblings carries
+        `published`: the acquire op, the sibling sites that reported they could
+        not source it, and the holds this site published for them to pull.
       parameters:
         - name: id
           in: path
@@ -11287,6 +11291,56 @@ components:
           $ref: "#/components/schemas/AcquisitionTransfer"
         fan_out:
           $ref: "#/components/schemas/AcquisitionFanOut"
+        published:
+          $ref: "#/components/schemas/AcquisitionPublished"
+
+    AcquisitionPublished:
+      type: object
+      description: |
+        The origin's side of fan-out (ADR-0119, #799): the newest acquire op this
+        site signed for the want's work, scope and aspect, and what came back
+        from its siblings. Absent when this site published nothing for it.
+
+        The op is keyed on (work, scope, aspect), not on the profile, so two
+        wants for the same work at the same scope under different profiles show
+        the same publication. What a sibling otherwise did with the op is
+        recorded only at that sibling (its `fan_out` block, `GET /fan-out`);
+        the one answer that travels back on the op-log is an `unsourced`
+        report.
+      required: [op_hash, infohash, release_name, scope, aspect, private, selected_at]
+      properties:
+        op_hash: { type: string }
+        infohash: { type: string }
+        release_name: { type: string }
+        scope: { type: string }
+        aspect: { type: string }
+        private:
+          type: boolean
+          description: The release came from a private indexer, so the op carries no trackers.
+        selected_at: { type: string, format: date-time }
+        unsourced_by:
+          type: array
+          description: |
+            The current sibling sites that reported they can resolve no source
+            for the release, so this site holds the bytes for them to pull.
+          items:
+            type: object
+            required: [site, op_hash, reported_at]
+            properties:
+              site: { type: string }
+              op_hash: { type: string }
+              reported_at: { type: string, format: date-time }
+        holds:
+          type: array
+          description: The hold ops this site published for the work, for a sibling to pull.
+          items:
+            type: object
+            required: [op_hash, blob_hash, scope, held_at]
+            properties:
+              op_hash: { type: string }
+              blob_hash: { type: string }
+              scope: { type: string }
+              held_at: { type: string, format: date-time }
 
     AcquisitionTransfer:
       type: object

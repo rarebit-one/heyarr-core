@@ -87,30 +87,41 @@ func (c *Catalog) AcquireFacts(ctx context.Context, desiredItemID string) (Acqui
 	}
 	f.Year = int(year.Int64)
 
-	switch desired.Scope(scope) {
-	case desired.ScopeEdition:
-		if !editionKey.Valid {
-			return AcquireFacts{}, fmt.Errorf("catalog: want %s is edition-scoped but names no edition", desiredItemID)
-		}
-		f.Scope = catalogop.ScopeEditionPrefix + editionKey.String
-	case desired.ScopeItem:
-		if !itemKey.Valid {
-			return AcquireFacts{}, fmt.Errorf("catalog: want %s is item-scoped but names no item", desiredItemID)
-		}
-		f.Scope = catalogop.ScopeItemPrefix + itemKey.String
-	default:
-		f.Scope = catalogop.ScopeWork
-	}
-	if desired.Aspect(aspect) == desired.AspectSubtitle {
-		f.Aspect = catalogop.AspectSubtitlePrefix + strings.ToLower(language)
-	} else {
-		f.Aspect = catalogop.AspectPrimary
+	if f.Scope, f.Aspect, err = opScopeAspect(desiredItemID, scope, aspect, language, editionKey, itemKey); err != nil {
+		return AcquireFacts{}, err
 	}
 	f.SelectedAt = parseStamp(searchedAt)
 	if attrs.Valid {
 		f.Size, f.Private = candidateFacts(attrs.String)
 	}
 	return f, nil
+}
+
+// opScopeAspect spells a want's scope and aspect the way an acquire op does
+// (catalogop.ScopeWork, "edition:<key>", "item:<key>"; catalogop.AspectPrimary,
+// "subtitle:<lang>").
+func opScopeAspect(desiredItemID, scope, aspect, language string, editionKey, itemKey sql.NullString) (string, string, error) {
+	var opScope, opAspect string
+	switch desired.Scope(scope) {
+	case desired.ScopeEdition:
+		if !editionKey.Valid {
+			return "", "", fmt.Errorf("catalog: want %s is edition-scoped but names no edition", desiredItemID)
+		}
+		opScope = catalogop.ScopeEditionPrefix + editionKey.String
+	case desired.ScopeItem:
+		if !itemKey.Valid {
+			return "", "", fmt.Errorf("catalog: want %s is item-scoped but names no item", desiredItemID)
+		}
+		opScope = catalogop.ScopeItemPrefix + itemKey.String
+	default:
+		opScope = catalogop.ScopeWork
+	}
+	if desired.Aspect(aspect) == desired.AspectSubtitle {
+		opAspect = catalogop.AspectSubtitlePrefix + strings.ToLower(language)
+	} else {
+		opAspect = catalogop.AspectPrimary
+	}
+	return opScope, opAspect, nil
 }
 
 // candidateFacts pulls the indexer's size_bytes (0 when absent) and privacy
