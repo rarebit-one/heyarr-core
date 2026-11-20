@@ -65,6 +65,9 @@ func (s *State) Snapshot() ([]byte, error) {
 // state as replaying the whole log — because the OR-Set is a semilattice and a
 // snapshot is just a partial fold of it.
 func FromSnapshot(b []byte) (*State, error) {
+	if err := refuseComposite(b); err != nil {
+		return nil, err
+	}
 	var snap stateSnapshot
 	if err := json.Unmarshal(b, &snap); err != nil {
 		return nil, fmt.Errorf("crdt: decoding a snapshot: %w", err)
