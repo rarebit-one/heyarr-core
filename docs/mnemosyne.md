@@ -47,7 +47,9 @@ exactly as heyarr's are, and without that route no membership record could ever
 be written — so the peer surface, the encrypted-state replication beat,
 `reconcile_peer` and `replicate_blob` would all be mounted with no sibling to
 reach (#762). Enrolment is admin-scoped in both directions (ADR-0012); the list
-is `read`.
+is `read`. The only other piece is the device tombstone
+(`DELETE /api/v1/identities/devices/{device}`, admin), which
+`mnemosyne device revoke` calls (#914); see below.
 
 Tokens are different: `mnemosyne token create` opens the database directly
 rather than going through HTTP, so `/api/v1/tokens` stays unmounted. The CLI
@@ -75,6 +77,26 @@ is not mounted, so the host grants it with `mnemosyne admin management grant
 <ed25519:device-key> --reason <why>` (and `revoke` / `list`). A device needs
 write here to create the spaces it owns, register an executor's service
 recipient and grant the executor a space (ADR-0104).
+
+Revocation is the one identity route that is mounted (#914). Uninstalling an
+app destroys its keys but not its admission, which stays valid until it
+expires, so retiring a device means tombstoning it at each controller it
+enrolled at:
+
+```
+mnemosyne device revoke <device> --device-dir <dir> --addr https://<node>:7779 --token <admin>
+```
+
+`<device>` is the device identity id (as `mnemosyne admin user list` and
+`space wrap --dry-run` show it), its `ed25519:<hex>` key, or the same key as
+bare hex. The command calls `DELETE /api/v1/identities/devices/<device>`
+(admin), and the device stops authenticating at once. It then re-keys every
+space wrapped for the revoked device's encryption key that the `--device-dir`
+device can open, and reports any it could not as skipped
+(`space rotate --revoke`, ADR-0049, ADR-0103). Pass `--no-rotate` to tombstone
+only. The tombstone is local to the controller; the re-key replicates like any
+other change. Pinning and unpinning users, and admin enrolment of a device,
+stay on the host (`admin user pin`) and `POST /enrol`.
 
 Mnemosyne **does not** mount: the rest of the resource API, library/scanner/
 ingest, search, acquisition, the MCP surface, render, relay, DLNA, OPDS,
@@ -279,7 +301,7 @@ until the new one is verified.
 1. **Bring Mnemosyne up and pin the user.** Run it as in [Running](#running),
    at every site that will hold the vault. Pin the owner's user identity on
    each one: pins are per controller, and the personal profile mounts no
-   identities API.
+   user-pinning route.
 
    ```
    mnemosyne admin user pin <name> <ed25519:user-key> --recovery-key <x25519:recovery-key>

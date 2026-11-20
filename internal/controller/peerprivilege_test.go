@@ -66,10 +66,11 @@ var adminSurfaceFloor = []string{
 // (httpapi.PresentedPeerKey), not the decision: everything downstream of it is
 // the production path.
 type peerSurfaceHarness struct {
-	server  *httptest.Server
-	tokens  *auth.Store
-	members *membership.Store
-	router  chi.Routes
+	server     *httptest.Server
+	tokens     *auth.Store
+	members    *membership.Store
+	identities *deviceauth.Store
+	router     chi.Routes
 }
 
 func newPeerSurfaceHarness(t *testing.T, presented httpapi.PresentedPeerKey) *peerSurfaceHarness {
@@ -151,7 +152,7 @@ func newProfileSurfaceHarness(t *testing.T, c *Controller, presented httpapi.Pre
 	}
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
-	return &peerSurfaceHarness{server: ts, tokens: tokens, members: members, router: router}
+	return &peerSurfaceHarness{server: ts, tokens: tokens, members: members, identities: identities, router: router}
 }
 
 // Two clients, because the two phases of this file want opposite things from a

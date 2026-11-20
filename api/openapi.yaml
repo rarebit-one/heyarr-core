@@ -8079,8 +8079,22 @@ paths:
       description: |
         A tombstone, unlike a user revoke: the row stays and `revoked_at` is set,
         so a re-presented cert for the key is refused rather than silently
-        re-enrolled, and the revocation is auditable.
-      parameters: [{ $ref: "#/components/parameters/publicKey" }]
+        re-enrolled, and the revocation is auditable. Idempotent: an already
+        revoked device is returned unchanged.
+
+        Mounted on both profiles: it is the one identity admin route the
+        personal (Mnemosyne) profile serves, because an uninstalled app's
+        admission stays valid until it expires and this is how a peer stops
+        honouring it early (#914).
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema: { type: string }
+          description: |
+            The device: its rendered key (`ed25519:<64 hex characters>`), the
+            same key as bare hex, or its device identity id. The ":" is a legal
+            path character and no key contains a "/".
       responses:
         "200":
           description: The revoked device.

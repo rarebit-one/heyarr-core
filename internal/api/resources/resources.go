@@ -610,6 +610,28 @@ func (a *API) Mount(r chi.Router) {
 		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/identities/users/{key}", a.revokeIdentityUser)
 		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Get("/identities/users/{key}/devices", a.listIdentityDevices)
 		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Post("/identities/devices", a.enrolDevice)
+	}
+	a.MountDeviceRevocation(r)
+}
+
+// MountDeviceRevocation registers the device tombstone (DELETE
+// /identities/devices/{key}) on its own, so the personal profile (ADR-0107,
+// #914) can revoke one of a user's devices without carrying the rest of the
+// identity admin surface.
+//
+// Mnemosyne enrols devices (POST /enrol, ADR-0067) and pins users from the
+// host (`admin user pin`), so it needs no remote pinning route; but an app
+// that is uninstalled leaves an admission that stays valid until it expires,
+// and the only way to end it early is this peer's tombstone. Without it,
+// `mnemosyne device revoke` has nothing to call, and the re-key that follows
+// it never runs. Mount calls this too, so the media profile's route table is
+// exactly what it was. Admin, like every identity route: ending a device's
+// trust is as much a trust decision as granting it.
+//
+// The {key} is any reference the store resolves (deviceauth.ResolveDevice):
+// the rendered key, its bare hex, or the device identity id.
+func (a *API) MountDeviceRevocation(r chi.Router) {
+	if a.identities != nil {
 		r.With(httpapi.RequireScope(auth.ScopeAdmin)).Delete("/identities/devices/{key}", a.revokeIdentityDevice)
 	}
 }

@@ -7,8 +7,9 @@ package controller
 // routes are present or absent. Table-driven over the two profiles:
 //
 //  1. Personal profile — the personal-state plane, vault blob upload, vault
-//     placement pins, blob content serving and the peer-membership routes
-//     (#762); nothing else from the resource API.
+//     placement pins, blob content serving, the peer-membership routes
+//     (#762) and the device tombstone (#914); nothing else from the resource
+//     API.
 //  2. Media profile — the full media route table, and no vault upload or
 //     placement routes: the vault is Mnemosyne's (#754). Blob content serving
 //     stays.
@@ -105,6 +106,8 @@ func TestProfileRouting(t *testing.T) {
 				"/api/v1/peers",
 				"/api/v1/peers/{id}",
 				"/api/v1/peers/{id}/reconcile",
+				// The device tombstone (#914): `mnemosyne device revoke`.
+				"/api/v1/identities/devices/{key}",
 				"/enrol",   // device enrolment
 				"/healthz", // health
 				"/metrics", // metrics
@@ -123,6 +126,8 @@ func TestProfileRouting(t *testing.T) {
 				"/api/v1/devices", // resources.API only
 				"/api/v1/events",  // resources.API only (SSE stream)
 				"/api/v1/session", // resources.API only
+				// Users are pinned on the host (`admin user pin`), not over HTTP.
+				"/api/v1/identities/users",
 			},
 		},
 		{

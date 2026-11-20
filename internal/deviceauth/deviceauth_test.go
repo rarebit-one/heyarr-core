@@ -517,3 +517,58 @@ func TestEnrolV1DevicePinsNoEncryptionKey(t *testing.T) {
 		t.Fatalf("a v1 device reported encryption key %q, want none", looked.EncryptionKey)
 	}
 }
+
+// ResolveDevice names an enrolled device three ways — its rendered key, the
+// key as bare hex, its device identity id — which is what an operator pastes
+// into `device revoke` (#914). Anything else is unknown, never a near match.
+func TestResolveDevice(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newFixture(t)
+	a := newActor(t)
+	f.enrol(t, a)
+	enrolled, err := f.store.LookupDevice(ctx, a.deviceKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare := strings.TrimPrefix(a.deviceKey, identity.Algorithm+":")
+
+	for _, tc := range []struct {
+		name, ref string
+		wantErr   error
+	}{
+		{name: "rendered key", ref: a.deviceKey},
+		{name: "bare hex key", ref: bare},
+		{name: "device identity id", ref: enrolled.ID},
+		{name: "surrounding whitespace", ref: " " + bare + "\n"},
+		{name: "uppercase hex is not a rendering", ref: strings.ToUpper(bare), wantErr: deviceauth.ErrUnknownDevice},
+		{name: "another algorithm", ref: "x25519:" + bare, wantErr: deviceauth.ErrUnknownDevice},
+		{name: "a truncated key", ref: bare[:63], wantErr: deviceauth.ErrUnknownDevice},
+		{name: "an unknown id", ref: "01a14f26-d5c2-747a-a9b8-000000000000", wantErr: deviceauth.ErrUnknownDevice},
+		{name: "empty", ref: "", wantErr: deviceauth.ErrUnknownDevice},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := f.store.ResolveDevice(ctx, tc.ref)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("ResolveDevice(%q) = %+v, %v; want %v", tc.ref, got, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil || got.ID != enrolled.ID || got.DeviceKey != a.deviceKey {
+				t.Fatalf("ResolveDevice(%q) = %+v, %v; want device %s", tc.ref, got, err, enrolled.ID)
+			}
+		})
+	}
+
+	// RevokeDevice resolves the same way: revoking by id tombstones the row the
+	// key names, and a second revoke by bare hex returns it unchanged.
+	revoked, err := f.store.RevokeDevice(ctx, enrolled.ID)
+	if err != nil || revoked.RevokedAt == nil || revoked.DeviceKey != a.deviceKey {
+		t.Fatalf("RevokeDevice(id) = %+v, %v", revoked, err)
+	}
+	again, err := f.store.RevokeDevice(ctx, bare)
+	if err != nil || again.RevokedAt == nil || !again.RevokedAt.Equal(*revoked.RevokedAt) {
+		t.Fatalf("RevokeDevice(bare hex) after revocation = %+v, %v; want it unchanged", again, err)
+	}
+}

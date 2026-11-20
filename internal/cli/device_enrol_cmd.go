@@ -20,7 +20,7 @@ import (
 // device enrolling itself at a peer through POST /enrol (ADR-0067), the route
 // the phone apps call after pairing. Before it, a device paired on the command
 // line (void-which-binds pair-join) had no way to enrol at a controller that
-// does not mount the admin identities API — the Mnemosyne personal profile — so
+// does not mount the admin enrolment route — the Mnemosyne personal profile — so
 // nothing could be wrapped for it there (enrol-before-wrap, ADR-0049).
 //
 // Like the rest of `device` it reads no server configuration: the peer is named

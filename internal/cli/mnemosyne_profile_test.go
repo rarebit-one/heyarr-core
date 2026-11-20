@@ -43,7 +43,7 @@ func TestMnemosyneSharedCommandsUseMnemosyneProfile(t *testing.T) {
 		t.Fatalf("token did not land in the database the list reads: %s", list)
 	}
 
-	// The personal profile mounts no identities API, so `admin user pin` is how
+	// The personal profile mounts no user-pinning route, so `admin user pin` is how
 	// its first user is pinned; the pin must land where the server reads it.
 	if out := mn("admin", "user", "pin", "owner", fixedUserKey(1), "--recovery-key", rekeyOldRecovery, "--json"); !strings.Contains(out, fixedUserKey(1)) {
 		t.Fatalf("expected the pinned key, got %s", out)

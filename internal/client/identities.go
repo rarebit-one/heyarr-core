@@ -24,10 +24,12 @@ type IdentityDevice struct {
 // RevokeIdentityDevice tombstones one device on the peer (the admin's local
 // word, not a membership op — ADR-0068) and returns the record it revoked,
 // including the encryption key an operator re-keys spaces away from.
-// Idempotent: revoking an already-revoked device returns it unchanged.
-func (c *Client) RevokeIdentityDevice(ctx context.Context, deviceKey string) (IdentityDevice, error) {
+// Idempotent: revoking an already-revoked device returns it unchanged. The
+// device is named by its rendered key, the key's bare hex, or its device
+// identity id; the peer resolves which.
+func (c *Client) RevokeIdentityDevice(ctx context.Context, device string) (IdentityDevice, error) {
 	var out IdentityDevice
-	if err := c.DeleteInto(ctx, "/identities/devices/"+url.PathEscape(deviceKey), &out); err != nil {
+	if err := c.DeleteInto(ctx, "/identities/devices/"+url.PathEscape(device), &out); err != nil {
 		return IdentityDevice{}, err
 	}
 	return out, nil
