@@ -341,6 +341,9 @@ type DesiredItem struct {
 	QualityProfileID string `json:"quality_profile_id"`
 	Monitor          bool   `json:"monitor"`
 	Reason           string `json:"reason,omitempty"`
+	// OriginSite is the sibling site whose choice created this want through
+	// fan-out (ADR-0119), absent for a want this site created.
+	OriginSite string `json:"origin_site,omitempty"`
 	// Acquisition is where this want has got to (§64). Absent when the want
 	// has no acquisition state — possible only for a row created before the
 	// state machine existed.

@@ -4723,6 +4723,18 @@ paths:
             terminal appears here. `GET /desired/{id}/satisfaction` reports the
             terminal test per want, and the `upgrade_scan` job applies it.
           schema: { type: string, enum: ["true", "false"] }
+        - name: fan_out
+          in: query
+          description: |
+            Only the wants a sibling site's choice of release created through
+            fan-out (ADR-0119), or only the ones this site created itself.
+          schema: { type: string, enum: ["true", "false"] }
+        - name: origin_site
+          in: query
+          description: |
+            Only the wants fan-out created from this sibling site's choice, by
+            the site name the acquire op carries (`origin_site` on the want).
+          schema: { type: string }
       responses:
         "200":
           description: A page of desired items.
@@ -5425,6 +5437,39 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Satisfaction" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/desired/{id}/acquisition:
+    get:
+      tags: [desired]
+      operationId: getAcquisitionStatus
+      summary: What a want is doing right now, and where it came from.
+      description: |
+        Where a want is in §64's pipeline and, when a download is in flight,
+        the transfer behind it: which release was chosen (its name carries the
+        resolution and size), how far it has got, any trouble the download
+        client reported, and `stopped` when the client has held it stopped for
+        more than ten minutes. The same read as MCP `get_acquisition_status`.
+
+        A want a sibling site's choice created (fan-out, ADR-0119) carries
+        `fan_out`: the origin site and release, what this site did with the
+        acquire op (`no_site_source` when it could not fetch it), whether it
+        reported that to the origin, and the peer-pull outcome of any hold the
+        origin published for the work. This is the answer to "why didn't this
+        site get X" without SQL (#799).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The want's pipeline position, transfer and fan-out origin.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AcquisitionStatus" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -11043,6 +11088,13 @@ components:
             Free text, never interpreted. It exists because a library
             accumulates wants and six months later nobody remembers why one is
             there.
+        origin_site:
+          type: string
+          description: |
+            The sibling site whose choice of release created this want through
+            fan-out (ADR-0119, #799). Absent for a want this site created
+            itself. `GET /desired/{id}/acquisition` says what this site did
+            with that choice.
         acquisition:
           $ref: "#/components/schemas/AcquisitionState"
         created_at: { type: string, format: date-time }
@@ -11154,6 +11206,120 @@ components:
             Bytes fetched so far of the transfer in flight, refreshed on every
             download poll. With `bytes_total`, this is how far a download has
             got — omitted when there is no transfer.
+
+    AcquisitionStatus:
+      type: object
+      description: |
+        A want's pipeline phase, the transfer in flight behind it, and, for a
+        want fan-out created, the sibling's choice behind it (#799).
+      required: [desired_item_id, phase, state, managed, content, placement]
+      properties:
+        desired_item_id: { type: string }
+        phase:
+          type: string
+          enum:
+            [idle, searching, candidates_found, selected, queued, downloading, verifying, ingesting]
+        state:
+          type: string
+          description: §64's display name for the phase and both axes.
+        managed: { type: boolean }
+        content:
+          type: string
+          enum: [unknown, not_satisfied, satisfied]
+        placement:
+          type: string
+          enum: [unknown, not_satisfied, converging, satisfied, not_applicable]
+        detail:
+          type: string
+          description: Why the last pipeline move happened, when it was a failure.
+        transfer:
+          $ref: "#/components/schemas/AcquisitionTransfer"
+        fan_out:
+          $ref: "#/components/schemas/AcquisitionFanOut"
+
+    AcquisitionTransfer:
+      type: object
+      description: |
+        The download client's side of an in-flight acquisition. Absent when
+        nothing is downloading.
+      required: [provider, external_id, release_name, bytes_total, bytes_done, percent_done]
+      properties:
+        provider: { type: string }
+        external_id:
+          type: string
+          description: The client's own identifier, an infohash for a torrent.
+        release_name:
+          type: string
+          description: What was grabbed, verbatim; the resolution, codec and size live here.
+        remote_path: { type: string }
+        local_path: { type: string }
+        bytes_total: { type: integer, format: int64 }
+        bytes_done: { type: integer, format: int64 }
+        percent_done: { type: number }
+        trouble:
+          type: string
+          description: The client's last error for this transfer, absent when healthy.
+        stopped:
+          type: object
+          description: |
+            The client has held the transfer stopped for more than ten minutes
+            (#883). Not trouble: the want is still waiting on it.
+          required: [reason, since, detail]
+          properties:
+            reason:
+              type: string
+              enum: [held, after_run]
+              description: |
+                `held`: added stopped by the client's own default and never
+                run. `after_run`: stopped after it ran.
+            since: { type: string, format: date-time }
+            detail:
+              type: string
+              description: What happened, and what to do about it.
+
+    AcquisitionFanOut:
+      type: object
+      description: |
+        The sibling's acquire op behind a want fan-out created, and this site's
+        outcomes for it (ADR-0119). Absent for a want this site created.
+      required:
+        [origin_site, op_hash, infohash, release_name, scope, aspect, outcome, applied_at, reported_unsourced]
+      properties:
+        origin_site:
+          type: string
+          description: The site that chose the release.
+        op_hash: { type: string }
+        infohash: { type: string }
+        release_name: { type: string }
+        scope: { type: string }
+        aspect: { type: string }
+        outcome:
+          type: string
+          enum: [applied, own, held, deferred, tombstoned, scope_unresolved, no_site_source, profile_unknown]
+          description: What this site did with the acquire op.
+        detail:
+          type: string
+          description: Why, in a sentence that names the origin site.
+        applied_at: { type: string, format: date-time }
+        reported_unsourced:
+          type: boolean
+          description: |
+            This site signed an `unsourced` op for the release: it told the
+            origin it can resolve no source, so the origin holds the bytes for
+            it to pull (ADR-0119, #800).
+        peer_pull:
+          type: array
+          description: This site's outcome for each hold op naming the want's work.
+          items:
+            type: object
+            required: [op_hash, blob_hash, outcome, applied_at]
+            properties:
+              op_hash: { type: string }
+              blob_hash: { type: string }
+              outcome: { type: string }
+              detail: { type: string }
+              library: { type: string }
+              applied_at: { type: string, format: date-time }
 
     CreateDesired:
       type: object

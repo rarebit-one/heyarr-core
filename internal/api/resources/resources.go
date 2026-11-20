@@ -518,6 +518,10 @@ func (a *API) Mount(r chi.Router) {
 	// catalog was supplied — see Options.Catalog.
 	if a.catalog != nil {
 		r.Get("/desired/{id}/satisfaction", a.getSatisfaction)
+		// Where a want is in the pipeline, the transfer behind it and, for a
+		// want fan-out created, what became of the sibling's choice here: the
+		// HTTP half of get_acquisition_status (#799).
+		r.Get("/desired/{id}/acquisition", a.getAcquisitionStatus)
 		// Asking for a reconciliation is a write: it queues work.
 		r.With(httpapi.RequireScope(auth.ScopeWrite)).
 			Post("/desired/{id}/reconcile", a.reconcileDesired)

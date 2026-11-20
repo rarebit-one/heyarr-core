@@ -177,6 +177,7 @@ func newDesiredListCommand(_ Options, configPath *string) *cobra.Command {
 		scope     string
 		workID    string
 		monitored string
+		origin    string
 	)
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -193,6 +194,9 @@ func newDesiredListCommand(_ Options, configPath *string) *cobra.Command {
 				}
 				if monitored != "" {
 					q.Set("monitor", monitored)
+				}
+				if origin != "" {
+					q.Set("origin_site", origin)
 				}
 				opts := list.options()
 				opts.Query = q
@@ -230,6 +234,8 @@ func newDesiredListCommand(_ Options, configPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&workID, "work-id", "", "only wants for this work")
 	cmd.Flags().StringVar(&monitored, "monitor", "",
 		"only monitored (true) or unmonitored (false) wants")
+	cmd.Flags().StringVar(&origin, "origin-site", "",
+		"only wants fan-out created from this sibling site's choice")
 	return cmd
 }
 
