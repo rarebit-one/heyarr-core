@@ -42,6 +42,7 @@ var toolArgs = map[string]any{
 	"get_content_satisfaction": getContentSatisfactionArgs{},
 	"get_acquisition_status":   getAcquisitionStatusArgs{},
 	"list_jobs":                listJobsArgs{},
+	"list_fan_out":             listFanOutArgs{},
 	"explain_release":          explainReleaseArgs{},
 
 	// Followed sources (tools_followed.go).

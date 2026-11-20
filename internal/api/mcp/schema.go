@@ -167,6 +167,16 @@ var schemaListJobs = obj(map[string]any{
 	"limit": rowLimit("How many jobs at most, most recent first. Defaults to the maximum."),
 })
 
+var schemaListFanOut = obj(map[string]any{
+	"outcome": strEnum("Only ops with this outcome here. `scope_unresolved`, `tombstoned` "+
+		"and a private release's `no_site_source` never create a want, so this is the "+
+		"only place they show. Omit for any outcome.",
+		"applied", "held", "deferred", "tombstoned", "scope_unresolved", "no_site_source", "profile_unknown"),
+	"origin_site": str("Only ops a sibling at this site signed, by the site name the op " +
+		"carries. Omit for every site."),
+	"limit": rowLimit("How many ops at most, most recently applied first. Defaults to the maximum."),
+})
+
 var schemaBlobHash = obj(map[string]any{
 	"blob_hash": str("The canonical blob digest, `blake3:` followed by 64 hex characters."),
 }, "blob_hash")

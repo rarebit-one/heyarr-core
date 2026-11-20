@@ -379,6 +379,41 @@ func (s *Server) getAcquisitionStatus(ctx context.Context, raw json.RawMessage) 
 	return result, nil
 }
 
+// listFanOutArgs is what listFanOut decodes (held to its schema by schemaargs_test.go).
+type listFanOutArgs struct {
+	Outcome    string `json:"outcome"`
+	OriginSite string `json:"origin_site"`
+	Limit      int    `json:"limit"`
+}
+
+// listFanOutResult is the listing envelope for list_fan_out.
+type listFanOutResult struct {
+	truncatable
+	FanOut []resources.FanOutOp `json:"fan_out"`
+}
+
+// listFanOut lists the siblings' acquire ops this site has an outcome for
+// (#799): the read behind "why didn't this site get X" when no want was ever
+// created to carry the answer.
+func (s *Server) listFanOut(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args listFanOutArgs
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	limit := args.Limit
+	if limit <= 0 || limit > maxRows {
+		limit = maxRows
+	}
+	found, err := s.resources.ListFanOut(ctx, args.Outcome, args.OriginSite, limit)
+	if err != nil {
+		return nil, classify(err)
+	}
+	return listFanOutResult{
+		truncatable: truncatable{Count: len(found), Truncated: len(found) == limit},
+		FanOut:      found,
+	}, nil
+}
+
 // listJobsResult is the listing envelope for list_jobs.
 type listJobsResult struct {
 	truncatable

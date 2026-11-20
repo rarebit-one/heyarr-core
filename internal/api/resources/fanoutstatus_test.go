@@ -166,3 +166,58 @@ func TestAcquisitionStatusOverHTTP(t *testing.T) {
 		t.Errorf("unknown want: status = %d, want 404", resp.StatusCode)
 	}
 }
+
+// GET /api/v1/fan-out (#799) lists the siblings' acquire ops this site has an
+// outcome for, including ones that never reached a want, and filters them.
+func TestListFanOutOverHTTP(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	op := seedFanOut(t, h)
+
+	type listing struct {
+		Items []struct {
+			OpHash        string `json:"op_hash"`
+			OriginSite    string `json:"origin_site"`
+			ContentType   string `json:"content_type"`
+			WorkKey       string `json:"work_key"`
+			Outcome       string `json:"outcome"`
+			DesiredItemID string `json:"desired_item_id"`
+		} `json:"items"`
+		Truncated bool `json:"truncated"`
+	}
+	read := func(query string) listing {
+		t.Helper()
+		resp := h.get("/api/v1/fan-out" + query)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: status = %d: %s", query, resp.StatusCode, h.body(resp))
+		}
+		var got listing
+		if err := json.Unmarshal(h.body(resp), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	all := read("")
+	if len(all.Items) != 1 || all.Truncated {
+		t.Fatalf("fan-out = %+v, want the one op", all)
+	}
+	if it := all.Items[0]; it.OpHash != op.Hash || it.OriginSite != "site-b" || it.ContentType != "movie" ||
+		it.WorkKey != "arrival|2016" || it.Outcome != "no_site_source" || it.DesiredItemID != desired1ID {
+		t.Errorf("item = %+v", it)
+	}
+	if got := read("?origin_site=site-c"); len(got.Items) != 0 {
+		t.Errorf("origin_site=site-c listed %+v", got.Items)
+	}
+	if got := read("?outcome=applied"); len(got.Items) != 0 {
+		t.Errorf("outcome=applied listed %+v", got.Items)
+	}
+	if got := read("?limit=1"); len(got.Items) != 1 || !got.Truncated {
+		t.Errorf("limit=1 = %+v, want one item and truncated", got)
+	}
+	for _, q := range []string{"?outcome=own", "?outcome=nonsense", "?limit=0", "?limit=501"} {
+		if resp := h.get("/api/v1/fan-out" + q); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", q, resp.StatusCode)
+		}
+	}
+}
