@@ -88,7 +88,7 @@ func TestLibrariesWithUnknownContentType(t *testing.T) {
 	if err == nil {
 		t.Fatal("reconciling a legacy row to a new type succeeded")
 	}
-	for _, s := range []string{`"show" in the database`, "not a content type Heyarr understands", "#896"} {
+	for _, s := range []string{`"show" in the database`, "not a content type Heyarr understands", "`heyarr library retype tv series`"} {
 		if !strings.Contains(err.Error(), s) {
 			t.Errorf("err = %v, want it to contain %q", err, s)
 		}

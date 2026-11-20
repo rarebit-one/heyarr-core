@@ -56,6 +56,18 @@ stable.
   `audio_channels gte 6` weight 5 and `gte 8` weight 5 — and the weights add
   up. The same rule twice, and two accept or terminal gates on one
   comparison, are still refused as a paste.
+- **A library whose type Heyarr does not understand can be retyped in place**
+  (#896, ADR-0127). `POST /api/v1/libraries/{id}/retype` with
+  `{"content_type": ...}` (`write`), and `heyarr library retype <library>
+  <content-type>`, give a library created before its type was checked (such as
+  `show`) a type Heyarr understands. Only the type changes: its id, roots and
+  assets stay as they are, and works already identified are not re-identified.
+  One-way: a target that is not a known type is a `400`, and a library whose
+  type is already known is a `409`, because moving between two known types
+  re-identifies every work. Retyping to the current type is a `200` and does
+  nothing. Each retype emits `content.library.retyped` with `content_type` and
+  `previous_content_type`. The start warning, `library list` and the reconcile
+  refusal for such a library now name the command.
 - **A library can be renamed in place** (ADR-0124). `PATCH
   /api/v1/libraries/{id}` with `{"name": ...}` (`write`), and `heyarr library
   rename <library> <new-name>`, change a library's name and nothing else. Its
@@ -341,10 +353,10 @@ stable.
   `libraries:` block still says `content_type: show` (or any other spelling)
   now refuses to start and names the library and the set. Fix the config
   before upgrading. If the library's database row also says `show`, changing
-  the config to `series` is refused as a content-type change, because a row
-  cannot yet be corrected in place: remove that library from the `libraries:`
-  block to start, and its row and roots stay as they are. Such rows are named
-  by a warning at start and marked `(unknown)` in `heyarr library list`.
+  the config to `series` is refused until the row matches: remove that library
+  from the `libraries:` block to start, then run `heyarr library retype <library> series` and restore
+  the block. Such rows are named by a warning at start and marked `(unknown)`
+  in `heyarr library list`.
 - **Migration 00060 runs a one-time `VACUUM`** to switch the database to
   `auto_vacuum=INCREMENTAL` (#721). On a large control plane this takes minutes
   at startup and needs free space about the size of `heyarr.db`, so plan for a

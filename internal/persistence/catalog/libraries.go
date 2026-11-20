@@ -154,12 +154,15 @@ func getOrCreateLibrary(ctx context.Context, tx *sql.Tx, spec LibrarySpec, stamp
 	if contentType != spec.ContentType {
 		// A row whose type predates #227's gate is the one an operator will hit
 		// while correcting the config: the new spelling is right and the row
-		// still cannot follow it. Say that, rather than "create a new library".
+		// still cannot follow it. Say that, and name the way out: the reconcile
+		// will not retype a row by itself, but `library retype` will, and then
+		// this check passes (ADR-0127).
 		if !identification.IsContentType(contentType) {
 			return "", false, fmt.Errorf("catalog: library %q is %q in the database, which is not a content type Heyarr "+
-				"understands, and %s in the configuration — a library's content type cannot be changed in place yet (#896); "+
-				"remove the library from the configuration to start, and the existing row is kept as it is",
-				spec.Name, contentType, spec.ContentType)
+				"understands, and %s in the configuration — correct the row with `heyarr library retype %s %s`: "+
+				"remove the library from the configuration to start, retype it, then restore it, and the existing row "+
+				"and its content are kept as they are",
+				spec.Name, contentType, spec.ContentType, spec.Name, spec.ContentType)
 		}
 		return "", false, fmt.Errorf("catalog: library %q is %s in the database and %s in the configuration — "+
 			"a library's content type cannot be changed in place; create a new library instead",
@@ -232,6 +235,115 @@ func (c *Catalog) LibrariesWithUnknownContentType(ctx context.Context) ([]Unknow
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("catalog: listing library content types: %w", err)
+	}
+	return out, nil
+}
+
+// ErrNoLibrary is RetypeLibrary's answer for an id no library has.
+var ErrNoLibrary = errors.New("catalog: no library with that id")
+
+// ErrUnknownContentType is RetypeLibrary's refusal of a target type
+// identification.IsContentType does not know: retyping to another unknown type
+// would trade one wrong declaration for another.
+var ErrUnknownContentType = errors.New("catalog: not a content type Heyarr understands")
+
+// KnownContentTypeError is RetypeLibrary's refusal of a library whose current
+// type is already a known one. Moving between two known types re-identifies
+// every work in the library, which is a migration rather than a correction;
+// the reconciler refuses it for the same reason.
+type KnownContentTypeError struct {
+	Name        string
+	ContentType string
+	Wanted      string
+}
+
+func (e *KnownContentTypeError) Error() string { return "catalog: " + e.Reason() }
+
+// Reason is the refusal without the package prefix, for an API problem or a
+// CLI message to carry as it is.
+func (e *KnownContentTypeError) Reason() string {
+	return fmt.Sprintf("library %q is already %s, a content type Heyarr understands — "+
+		"a retype only corrects a type Heyarr does not understand; changing %s to %s would re-identify "+
+		"every work in the library, so create a new library instead",
+		e.Name, e.ContentType, e.ContentType, e.Wanted)
+}
+
+// RetypedLibrary is what RetypeLibrary did. Changed is false when the library
+// already had the wanted type, which is not a transition.
+type RetypedLibrary struct {
+	ID                  string
+	Name                string
+	ContentType         string
+	PreviousContentType string
+	Changed             bool
+}
+
+// RetypeLibrary gives a library whose stored content_type Heyarr does not
+// understand a type it does (#896, ADR-0127). It is the only in-place change
+// of a library's type, and it is one-way on purpose: from unknown to known.
+//
+// A row created before the gates closed keeps a type like `show`, which no
+// identification rule declares and no acquisition target matches. Guessing the
+// right type is what createLibrary refuses to do, so the operator names it.
+// From a known type the change is refused (KnownContentTypeError): that is a
+// migration, not a correction. A target that is not known is refused
+// (ErrUnknownContentType).
+//
+// Retyping to the type the library already has succeeds with Changed false and
+// emits nothing, so running the command twice is safe — the second run finds a
+// known type equal to the one asked for, which is not a refusal.
+//
+// Only the column changes. Roots, assets and their works stay as they are, and
+// works already identified under the old type are not re-identified.
+func (c *Catalog) RetypeLibrary(ctx context.Context, id, contentType string) (RetypedLibrary, error) {
+	if !identification.IsContentType(contentType) {
+		return RetypedLibrary{}, fmt.Errorf("%w: %q — use one of: %s",
+			ErrUnknownContentType, contentType, strings.Join(identification.ContentTypes(), ", "))
+	}
+
+	var (
+		out RetypedLibrary
+		ev  events.Event
+	)
+	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		out = RetypedLibrary{ID: id, ContentType: contentType}
+		err := tx.QueryRowContext(ctx, `SELECT name, content_type FROM libraries WHERE id = ?`, id).
+			Scan(&out.Name, &out.PreviousContentType)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNoLibrary
+		}
+		if err != nil {
+			return fmt.Errorf("catalog: reading library %s: %w", id, err)
+		}
+		if out.PreviousContentType == contentType {
+			return nil
+		}
+		if identification.IsContentType(out.PreviousContentType) {
+			return &KnownContentTypeError{Name: out.Name, ContentType: out.PreviousContentType, Wanted: contentType}
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE libraries SET content_type = ? WHERE id = ?`, contentType, id); err != nil {
+			return fmt.Errorf("catalog: retyping library %s: %w", id, err)
+		}
+		ev, err = c.events.EmitTx(ctx, tx, events.TypeLibraryRetyped, "library", id, map[string]any{
+			"library_id":            id,
+			"name":                  out.Name,
+			"content_type":          contentType,
+			"previous_content_type": out.PreviousContentType,
+		})
+		if err != nil {
+			return err
+		}
+		out.Changed = true
+		return nil
+	})
+	if err != nil {
+		return RetypedLibrary{}, err
+	}
+	if out.Changed {
+		c.events.Publish(ev)
+		c.log.Info("retyped a library", "library_id", id, "library", out.Name,
+			"content_type", contentType, "previous_content_type", out.PreviousContentType)
 	}
 	return out, nil
 }

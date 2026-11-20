@@ -163,9 +163,9 @@ func reconcileLibraries(ctx context.Context, db *sqlite.DB, cfg config.Config, l
 // what it was given. Such a library is identified as if it declared no type —
 // every rule, movie rules first — and acquisition never chooses it as a target,
 // and neither failure looks like a declaration nobody checked. A warning rather
-// than a refusal to start, because the row cannot yet be corrected in place and
-// a node that will not start is a worse place to be than one that is wrong in a
-// way it names.
+// than a refusal to start, because the fix (`heyarr library retype`, ADR-0127)
+// goes through the API of a running node, and a node that will not start is a
+// worse place to be than one that is wrong in a way it names.
 func warnUnknownContentTypes(ctx context.Context, cat *catalog.Catalog, log *slog.Logger) error {
 	libs, err := cat.LibrariesWithUnknownContentType(ctx)
 	if err != nil {
@@ -178,7 +178,7 @@ func warnUnknownContentTypes(ctx context.Context, cat *catalog.Catalog, log *slo
 			"content_type", l.ContentType,
 			"known", strings.Join(identification.ContentTypes(), ", "),
 			"cost", "identification ignores the library's type, and acquisition never chooses it as a target",
-			"fix", "a library's content type cannot yet be changed in place — see #896")
+			"fix", "heyarr library retype "+l.Name+" <type>")
 	}
 	return nil
 }

@@ -30,6 +30,7 @@ through the API, so they work against a controller on another host.`,
 		newLibraryAddCommand(opts, configPath),
 		newLibraryListCommand(opts, configPath),
 		newLibraryRenameCommand(opts, configPath),
+		newLibraryRetypeCommand(opts, configPath),
 		newLibraryRmCommand(opts, configPath),
 		newLibraryRootCommand(opts, configPath),
 	)
@@ -68,6 +69,67 @@ library under the old name.`,
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "renamed library %s to %s (%s)\n",
 					lib.Name, updated.Name, updated.ID)
+				return nil
+			})
+		},
+	}
+	flags.register(cmd)
+	return cmd
+}
+
+func newLibraryRetypeCommand(_ Options, configPath *string) *cobra.Command {
+	var flags clientFlags
+	cmd := &cobra.Command{
+		Use:   "retype <library> <content-type>",
+		Short: "Correct a library type Heyarr does not understand, keeping its content",
+		Long: `Give a library, named by id or name, a content type Heyarr understands when
+its stored one is not (#896, ADR-0127). The type is one of: ` + contentTypeList() + `.
+
+A library created before Heyarr checked its type can carry one like ` + "`show`" + `,
+which identification ignores and acquisition never targets; ` + "`library list`" + `
+marks it (unknown). A retype changes only the type: the library's id, roots
+and assets stay as they are. Works already identified under the old type are
+not re-identified.
+
+Only an unknown type can be retyped. Changing one known type to another would
+re-identify every work in the library, so it is refused; create a new library
+instead. Retyping a library to the type it already has does nothing and is
+not an error.
+
+A library declared in the configuration file must say the new type there too.
+If the configuration already says it, the node refuses to start until the row
+matches: remove the library from the configuration, start, retype it, then
+restore it.`,
+		Example: "  heyarr library retype tv series",
+		Args:    cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return flags.withClient(cmd, configPath, func(ctx context.Context, c *client.Client) error {
+				lib, err := resolveLibrary(ctx, c, args[0])
+				if err != nil {
+					return err
+				}
+				var updated client.Library
+				err = c.Post(ctx, "/libraries/"+lib.ID+"/retype",
+					client.RetypeLibraryRequest{ContentType: args[1]}, &updated)
+				if client.IsNotFound(err) {
+					// The library resolved a moment ago, so a 404 here is most
+					// likely a controller that predates the route.
+					return fmt.Errorf("%w (if library %s still exists, the controller predates `library retype` — upgrade it)",
+						err, lib.Name)
+				}
+				if err != nil {
+					return err
+				}
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), updated)
+				}
+				if updated.ContentType == lib.ContentType {
+					fmt.Fprintf(cmd.OutOrStdout(), "library %s (%s) is already %s; nothing to do\n",
+						updated.Name, updated.ID, updated.ContentType)
+					return nil
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "retyped library %s (%s) from %s to %s\n",
+					updated.Name, updated.ID, lib.ContentType, updated.ContentType)
 				return nil
 			})
 		},
@@ -395,8 +457,8 @@ func newLibraryListCommand(_ Options, configPath *string) *cobra.Command {
 func warnUnknownContentTypes(w io.Writer, libs []client.Library) {
 	for _, l := range libs {
 		_, _ = fmt.Fprintf(w, "warning: library %q has content type %q, which Heyarr does not understand (one of: %s) — "+
-			"identification ignores it and acquisition never targets this library; it cannot yet be corrected in place (#896)\n",
-			l.Name, l.ContentType, contentTypeList())
+			"identification ignores it and acquisition never targets this library; correct it with `heyarr library retype %s <type>`\n",
+			l.Name, l.ContentType, contentTypeList(), l.Name)
 	}
 }
 

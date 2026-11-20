@@ -1848,6 +1848,54 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/v1/libraries/{id}/retype:
+    post:
+      tags: [content]
+      operationId: retypeLibrary
+      summary: Correct a library type Heyarr does not understand. Requires `write`.
+      description: |
+        Gives a library whose stored `content_type` is not one Heyarr
+        understands (one created before the type was checked, such as `show`)
+        a type it does (#896, ADR-0127). Only the type changes: the id, roots
+        and assets stay as they are, and works already identified under the old
+        type are not re-identified. Emits `content.library.retyped` with
+        `library_id`, `name`, `content_type` and `previous_content_type`.
+
+        One-way on purpose. A `content_type` that is not a known one is a
+        `400`. A library whose current type is already known, and different,
+        is a `409`: that is a real content-type change, which would re-identify
+        every work in the library and is not done in place. Retyping to the type
+        the library already has is a `200` that emits no event, so the call is
+        safe to repeat. A library declared in the configuration file must say
+        the new type there too.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content_type]
+              additionalProperties: false
+              properties:
+                content_type:
+                  type: string
+                  description: |
+                    One of the types Heyarr understands, as `POST
+                    /api/v1/libraries` accepts: `movie`, `series`, `music`,
+                    `book`, `document`, `game` or `rom`.
+      responses:
+        "200":
+          description: The library, with its new type and its roots.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Library" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /api/v1/libraries/{id}/roots:
     post:
       tags: [content]
