@@ -5474,6 +5474,57 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/fan-out:
+    get:
+      tags: [desired]
+      operationId: listFanOut
+      summary: What this site did with its siblings' choices of release.
+      description: |
+        Every acquire op a sibling site published (fan-out, ADR-0119) that
+        this site has an outcome for, most recently applied first, with the
+        outcome and its detail. The same read as MCP `list_fan_out`.
+
+        `GET /desired/{id}/acquisition` answers "why didn't this site get X"
+        for a want fan-out created. This answers it for the outcomes that never
+        create one: `scope_unresolved` (the op names an edition or item this
+        site does not know), `tombstoned`, and a private release's
+        `no_site_source` (#799). This site's own ops are not fan-out and are
+        not listed.
+
+        Not cursor-paged: the ops are bounded by the catalog op-log, and
+        `truncated` says when `limit` cut the list.
+      parameters:
+        - name: outcome
+          in: query
+          schema:
+            type: string
+            enum: [applied, held, deferred, tombstoned, scope_unresolved, no_site_source, profile_unknown]
+        - name: origin_site
+          in: query
+          description: Only ops a sibling at this site signed.
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200":
+          description: The siblings' acquire ops and this site's outcomes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, truncated]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/FanOutOp" }
+                  truncated:
+                    type: boolean
+                    description: The list reached `limit`; there may be more.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /api/v1/desired/{id}/reconcile:
     post:
       tags: [desired]
@@ -11320,6 +11371,36 @@ components:
               detail: { type: string }
               library: { type: string }
               applied_at: { type: string, format: date-time }
+
+    FanOutOp:
+      type: object
+      description: One sibling's acquire op and what this site did with it (ADR-0119, #799).
+      required:
+        [op_hash, origin_site, content_type, work_key, release_name, infohash, scope, aspect, selected_at, outcome, applied_at, reported_unsourced]
+      properties:
+        op_hash: { type: string }
+        origin_site:
+          type: string
+          description: The site that chose the release.
+        content_type: { type: string }
+        work_key: { type: string }
+        work_title: { type: string }
+        release_name: { type: string }
+        infohash: { type: string }
+        scope: { type: string }
+        aspect: { type: string }
+        selected_at: { type: string, format: date-time }
+        outcome:
+          type: string
+          enum: [applied, held, deferred, tombstoned, scope_unresolved, no_site_source, profile_unknown]
+        detail: { type: string }
+        desired_item_id:
+          type: string
+          description: The want the op reached here. Absent when it reached none.
+        applied_at: { type: string, format: date-time }
+        reported_unsourced:
+          type: boolean
+          description: This site told the origin it can resolve no source for the release.
 
     CreateDesired:
       type: object

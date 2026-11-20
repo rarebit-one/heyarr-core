@@ -522,6 +522,9 @@ func (a *API) Mount(r chi.Router) {
 		// want fan-out created, what became of the sibling's choice here: the
 		// HTTP half of get_acquisition_status (#799).
 		r.Get("/desired/{id}/acquisition", a.getAcquisitionStatus)
+		// Every sibling acquire op this site has an outcome for, including
+		// the ones that never reached a want (#799).
+		r.Get("/fan-out", a.listFanOut)
 		// Asking for a reconciliation is a write: it queues work.
 		r.With(httpapi.RequireScope(auth.ScopeWrite)).
 			Post("/desired/{id}/reconcile", a.reconcileDesired)

@@ -65,26 +65,11 @@ func (c *Catalog) FanOutStatusFor(ctx context.Context, desiredItemID string) (Fa
 		return FanOutStatus{}, false, err
 	}
 
-	var selfKey []byte
-	switch err := c.db.Reader().QueryRowContext(ctx,
-		`SELECT public_key FROM peers WHERE is_self = 1`).Scan(&selfKey); {
-	case errors.Is(err, sql.ErrNoRows):
-	case err != nil:
-		return FanOutStatus{}, false, fmt.Errorf("catalog: reading this node's key: %w", err)
+	reported, err := c.reportedUnsourced(ctx)
+	if err != nil {
+		return FanOutStatus{}, false, err
 	}
-	if len(selfKey) == ed25519.PublicKeySize {
-		var one int
-		switch err := c.db.Reader().QueryRowContext(ctx, `
-			SELECT 1 FROM catalog_ops c, json_each(c.prev) p
-			 WHERE c.op = 'unsourced' AND c.signer = ? AND p.value = ? LIMIT 1`,
-			identity.FormatPublicKey(ed25519.PublicKey(selfKey)), out.OpHash).Scan(&one); {
-		case errors.Is(err, sql.ErrNoRows):
-		case err != nil:
-			return FanOutStatus{}, false, fmt.Errorf("catalog: reading this node's reports: %w", err)
-		default:
-			out.Reported = true
-		}
-	}
+	out.Reported = reported[out.OpHash]
 
 	holds, err := c.db.Reader().QueryContext(ctx, `
 		SELECT h.op_hash, h.blob_hash, COALESCE(h.library_id, ''), COALESCE(l.name, ''),
@@ -159,4 +144,132 @@ func (c *Catalog) newestFanOut(ctx context.Context, desiredItemID string) (FanOu
 		return FanOutStatus{}, catalogop.Op{}, false, fmt.Errorf("catalog: reading the fan-out of %s: %w", desiredItemID, err)
 	}
 	return out, pick, found, nil
+}
+
+// reportedUnsourced is the set of acquire op hashes this node told the origin
+// it can resolve no source for: the ops its own `unsourced` ops cite.
+func (c *Catalog) reportedUnsourced(ctx context.Context) (map[string]bool, error) {
+	var selfKey []byte
+	switch err := c.db.Reader().QueryRowContext(ctx,
+		`SELECT public_key FROM peers WHERE is_self = 1`).Scan(&selfKey); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return nil, fmt.Errorf("catalog: reading this node's key: %w", err)
+	}
+	out := map[string]bool{}
+	if len(selfKey) != ed25519.PublicKeySize {
+		return out, nil
+	}
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT p.value FROM catalog_ops c, json_each(c.prev) p
+		 WHERE c.op = 'unsourced' AND c.signer = ?`,
+		identity.FormatPublicKey(ed25519.PublicKey(selfKey)))
+	if err != nil {
+		return nil, fmt.Errorf("catalog: reading this node's reports: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return nil, fmt.Errorf("catalog: reading this node's reports: %w", err)
+		}
+		out[hash] = true
+	}
+	return out, rows.Err()
+}
+
+// FanOutEntry is one sibling's acquire op this node evaluated and what it did
+// with it, whether or not that reached a want (#799). scope_unresolved,
+// tombstoned and most no_site_source outcomes never create one, so this is the
+// only read that shows them.
+type FanOutEntry struct {
+	OpHash       string
+	Site         string
+	ContentType  string
+	WorkKey      string
+	WorkTitle    string
+	Infohash     string
+	ReleaseTitle string
+	Scope        string
+	Aspect       string
+	SelectedAt   time.Time
+	Outcome      FanOutOutcome
+	Detail       string
+	// DesiredItemID is the want the op was applied to, "" when none was.
+	DesiredItemID string
+	AppliedAt     time.Time
+	// Reported is whether this node signed an unsourced op for it.
+	Reported bool
+}
+
+// FanOutQuery filters ListFanOut. Zero fields match everything.
+type FanOutQuery struct {
+	Outcome FanOutOutcome
+	Site    string
+	// Limit bounds the result; zero or less means no bound.
+	Limit int
+}
+
+// ListFanOut lists the siblings' acquire ops this node has an outcome for,
+// most recently applied first. This node's own ops (outcome own) are not
+// fan-out here and are left out.
+//
+// The origin site lives in the signed op, not in a column, so it is filtered
+// after verifying each token. The table holds one row per acquire op in the
+// catalog op-log, which catalog sync already bounds.
+func (c *Catalog) ListFanOut(ctx context.Context, q FanOutQuery) ([]FanOutEntry, error) {
+	where, args := "c.op = 'acquire' AND o.outcome <> ?", []any{string(FanOutOwn)}
+	if q.Outcome != "" {
+		where += " AND o.outcome = ?"
+		args = append(args, string(q.Outcome))
+	}
+	//nolint:gosec // assembled only from the literal fragments above; every value is bound
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT o.op_hash, COALESCE(o.desired_item_id, ''), o.outcome, o.detail, o.applied_at,
+		       c.content_type, c.work_key, c.token
+		  FROM catalog_op_applications o JOIN catalog_ops c ON c.op_hash = o.op_hash
+		 WHERE `+where+`
+		 ORDER BY o.applied_at DESC, o.op_hash`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: listing fan-out: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []FanOutEntry
+	for rows.Next() {
+		var (
+			e         FanOutEntry
+			at, token string
+		)
+		if err := rows.Scan(&e.OpHash, &e.DesiredItemID, &e.Outcome, &e.Detail, &at,
+			&e.ContentType, &e.WorkKey, &token); err != nil {
+			return nil, fmt.Errorf("catalog: listing fan-out: %w", err)
+		}
+		op, err := catalogop.Verify(token)
+		if err != nil || op.Acquire == nil {
+			continue
+		}
+		a := op.Acquire
+		if q.Site != "" && a.Site != q.Site {
+			continue
+		}
+		e.Site, e.WorkTitle, e.Infohash, e.ReleaseTitle = a.Site, a.WorkTitle, a.Infohash, a.Title
+		e.Scope, e.Aspect, e.SelectedAt = a.Scope, a.Aspect, a.SelectedAt
+		e.AppliedAt = parseStamp(at)
+		out = append(out, e)
+		if q.Limit > 0 && len(out) == q.Limit {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: listing fan-out: %w", err)
+	}
+	_ = rows.Close()
+	reported, err := c.reportedUnsourced(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Reported = reported[out[i].OpHash]
+	}
+	return out, nil
 }

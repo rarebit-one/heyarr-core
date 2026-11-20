@@ -121,6 +121,21 @@ func (s *Server) registerAcquisitionTools() {
 	})
 
 	s.tools.register(Tool{
+		Name:     "list_fan_out",
+		Title:    "What this site did with its siblings' choices",
+		Scope:    auth.ScopeRead,
+		ReadOnly: true,
+		Description: "List the acquire ops sibling sites published (fan-out, ADR-0119) and what " +
+			"this site did with each, most recent first: the origin site, the work and release, " +
+			"the outcome (applied, held, deferred, tombstoned, scope_unresolved, no_site_source, " +
+			"profile_unknown) with its detail, the want it reached if any, and whether this site " +
+			"reported it unsourced. This is the read for \"why didn't this site get X\" when no want " +
+			"was ever created here to ask get_acquisition_status about.",
+		InputSchema: schemaListFanOut,
+		Handler:     s.listFanOut,
+	})
+
+	s.tools.register(Tool{
 		Name:     "list_jobs",
 		Title:    "Inspect the durable work queue",
 		Scope:    auth.ScopeRead,

@@ -10,6 +10,14 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **What this site did with every sibling's choice of release** (#799,
+  ADR-0119). New MCP `list_fan_out` and `GET /api/v1/fan-out` list the acquire
+  ops sibling sites published that this site has an outcome for, newest first:
+  origin site, work, release, outcome and detail, the want it reached if any,
+  and whether this site reported it unsourced. Filter by `outcome` and
+  `origin_site`. It is the only read for the outcomes that never create a want
+  (`scope_unresolved`, `tombstoned`, a private release's `no_site_source`),
+  which were visible only as `acquisition.fan_out_changed` events.
 - **A want's fan-out origin is on the HTTP API** (#799, ADR-0119). A want a
   sibling site's choice of release created carries `origin_site`, and
   `GET /api/v1/desired` filters on `fan_out=true|false` and `origin_site=`

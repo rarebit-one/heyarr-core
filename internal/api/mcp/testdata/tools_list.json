@@ -593,6 +593,44 @@
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
+      "description": "List the acquire ops sibling sites published (fan-out, ADR-0119) and what this site did with each, most recent first: the origin site, the work and release, the outcome (applied, held, deferred, tombstoned, scope_unresolved, no_site_source, profile_unknown) with its detail, the want it reached if any, and whether this site reported it unsourced. This is the read for \"why didn't this site get X\" when no want was ever created here to ask get_acquisition_status about.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "How many ops at most, most recently applied first. Defaults to the maximum.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "origin_site": {
+            "description": "Only ops a sibling at this site signed, by the site name the op carries. Omit for every site.",
+            "type": "string"
+          },
+          "outcome": {
+            "description": "Only ops with this outcome here. `scope_unresolved`, `tombstoned` and a private release's `no_site_source` never create a want, so this is the only place they show. Omit for any outcome.",
+            "enum": [
+              "applied",
+              "held",
+              "deferred",
+              "tombstoned",
+              "scope_unresolved",
+              "no_site_source",
+              "profile_unknown"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_fan_out",
+      "title": "What this site did with its siblings' choices"
+    },
+    {
+      "annotations": {
+        "heyarr/requiredScope": "read",
+        "readOnlyHint": true
+      },
       "description": "List every followed source with how many items its feed has yielded, how many are archived, when it was last polled and when it is due next, and whether its feed adapter is healthy. Read this to answer \"is this working\".",
       "inputSchema": {
         "additionalProperties": false,
