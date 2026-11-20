@@ -221,3 +221,86 @@ func TestListFanOutOverHTTP(t *testing.T) {
 		}
 	}
 }
+
+// GET /desired/{id}/acquisition at the origin carries `published` (#799): the
+// acquire op this site signed and the siblings that reported it unsourced. A
+// want this site published nothing for has none.
+func TestAcquisitionStatusAtTheOriginOverHTTP(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	selfPub, selfPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibPub, sibPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 8, 2, 9, 0, 0, 0, time.UTC)
+	stamp := at.Format(time.RFC3339)
+	h.exec(`UPDATE peers SET public_key = ? WHERE is_self = 1`, []byte(selfPub))
+	h.exec(`INSERT INTO peers (id, name, site, mode, is_self, public_key, enrolled_at, created_at)
+		VALUES ('sibling-peer', 'peer-b', 'site-b', 'partial', 0, ?, ?, ?)`, []byte(sibPub), stamp, stamp)
+	log := func(tok string, err error, kind, prev string) catalogop.Op {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		op, err := catalogop.Verify(tok)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.exec(`INSERT INTO catalog_ops (op_hash, content_type, work_key, op, signer, prev, iat, token, received_at)
+			VALUES (?, 'movie', 'arrival|2016', ?, ?, ?, ?, ?, ?)`, op.Hash, kind, op.By, prev, stamp, op.Token, stamp)
+		return op
+	}
+	tok, err := catalogop.SignAcquire(selfPriv, "movie", "arrival|2016", catalogop.Acquire{
+		Scope: catalogop.ScopeWork, Aspect: catalogop.AspectPrimary, Profile: "living-room",
+		Infohash: "0123456789abcdef0123456789abcdef01234567", Title: "Arrival 2016 2160p", Private: true,
+		WorkTitle: "Arrival", Year: 2016, SelectedAt: at, Site: "site-a",
+	}, nil, at)
+	acq := log(tok, err, "acquire", "[]")
+	tok, err = catalogop.SignUnsourced(sibPriv, "movie", "arrival|2016",
+		catalogop.Unsourced{Acquire: acq.Hash, Site: "site-b"}, []string{acq.Hash}, at)
+	report := log(tok, err, "unsourced", `["`+acq.Hash+`"]`)
+
+	type status struct {
+		Published *struct {
+			OpHash      string `json:"op_hash"`
+			Infohash    string `json:"infohash"`
+			Private     bool   `json:"private"`
+			SelectedAt  string `json:"selected_at"`
+			UnsourcedBy []struct {
+				Site   string `json:"site"`
+				OpHash string `json:"op_hash"`
+			} `json:"unsourced_by"`
+		} `json:"published"`
+	}
+	read := func(id string) status {
+		t.Helper()
+		resp := h.get("/api/v1/desired/" + id + "/acquisition")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d: %s", resp.StatusCode, h.body(resp))
+		}
+		var got status
+		if err := json.Unmarshal(h.body(resp), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	got := read(desired1ID)
+	if got.Published == nil {
+		t.Fatal("a want this site published has no published block")
+	}
+	if p := got.Published; p.OpHash != acq.Hash || p.Infohash != acq.Acquire.Infohash || !p.Private ||
+		p.SelectedAt != stamp || len(p.UnsourcedBy) != 1 || p.UnsourcedBy[0].Site != "site-b" ||
+		p.UnsourcedBy[0].OpHash != report.Hash {
+		t.Errorf("published = %+v", *p)
+	}
+	// desired2 wants the same work under another profile, at the same scope
+	// and aspect: the op is keyed on those, not the profile, so it is the
+	// same publication.
+	if got := read(desired2ID); got.Published == nil || got.Published.OpHash != acq.Hash {
+		t.Errorf("desired2: published = %+v, want the same op (same work, scope and aspect)", got.Published)
+	}
+}

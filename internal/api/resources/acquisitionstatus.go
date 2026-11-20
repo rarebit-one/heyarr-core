@@ -36,6 +36,47 @@ type AcquisitionStatusView struct {
 	// FanOut is where a want fan-out created came from and what became of it
 	// here (ADR-0119, #799). Absent for a want this site created itself.
 	FanOut *AcquisitionFanOut `json:"fan_out,omitempty"`
+	// Published is the origin's side of fan-out: the acquire op this site
+	// published for the want, and the siblings that reported they could not
+	// source it (#799). Absent when this site published nothing for it.
+	Published *AcquisitionPublished `json:"published,omitempty"`
+}
+
+// AcquisitionPublished is the acquire op this site signed for a want, and what
+// came back from its siblings on the op-log.
+//
+// What a sibling did with the op is recorded only at that sibling; read it
+// there (get_acquisition_status, list_fan_out). The one answer that travels
+// back is an `unsourced` report, which is what UnsourcedBy shows.
+type AcquisitionPublished struct {
+	OpHash      string `json:"op_hash"`
+	Infohash    string `json:"infohash"`
+	ReleaseName string `json:"release_name"`
+	Scope       string `json:"scope"`
+	Aspect      string `json:"aspect"`
+	Private     bool   `json:"private"`
+	SelectedAt  string `json:"selected_at"`
+	// UnsourcedBy are the sibling sites that reported they can resolve no
+	// source for the release, so this site holds it for them to pull.
+	UnsourcedBy []AcquisitionUnsourced `json:"unsourced_by,omitempty"`
+	// Holds are the hold ops this site published for the want's work: bytes
+	// it holds for a sibling to pull over the peer surface.
+	Holds []AcquisitionPublishedHold `json:"holds,omitempty"`
+}
+
+// AcquisitionUnsourced is one sibling's unsourced report.
+type AcquisitionUnsourced struct {
+	Site       string `json:"site"`
+	OpHash     string `json:"op_hash"`
+	ReportedAt string `json:"reported_at"`
+}
+
+// AcquisitionPublishedHold is one hold op this site signed.
+type AcquisitionPublishedHold struct {
+	OpHash   string `json:"op_hash"`
+	BlobHash string `json:"blob_hash"`
+	Scope    string `json:"scope"`
+	HeldAt   string `json:"held_at"`
 }
 
 // AcquisitionFanOut is the sibling's acquire op behind a want and this site's
@@ -205,6 +246,28 @@ func (a *API) AcquisitionStatus(ctx context.Context, id string) (AcquisitionStat
 			out.FanOut.PeerPull = append(out.FanOut.PeerPull, AcquisitionHold{
 				OpHash: h.OpHash, BlobHash: h.BlobHash, Outcome: string(h.Outcome), Detail: h.Detail,
 				Library: fo.HoldLibraries[h.OpHash], AppliedAt: h.AppliedAt.UTC().Format(time.RFC3339),
+			})
+		}
+	}
+
+	pub, found, err := a.catalog.PublishedFor(ctx, id)
+	if err != nil {
+		return AcquisitionStatusView{}, err
+	}
+	if found {
+		out.Published = &AcquisitionPublished{
+			OpHash: pub.OpHash, Infohash: pub.Infohash, ReleaseName: pub.ReleaseTitle,
+			Scope: pub.Scope, Aspect: pub.Aspect, Private: pub.Private,
+			SelectedAt: pub.SelectedAt.UTC().Format(time.RFC3339),
+		}
+		for _, r := range pub.Unsourced {
+			out.Published.UnsourcedBy = append(out.Published.UnsourcedBy, AcquisitionUnsourced{
+				Site: r.Site, OpHash: r.OpHash, ReportedAt: r.ReportedAt.UTC().Format(time.RFC3339),
+			})
+		}
+		for _, h := range pub.Holds {
+			out.Published.Holds = append(out.Published.Holds, AcquisitionPublishedHold{
+				OpHash: h.OpHash, BlobHash: h.Blob, Scope: h.Scope, HeldAt: h.HeldAt.UTC().Format(time.RFC3339),
 			})
 		}
 	}

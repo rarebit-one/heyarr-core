@@ -149,21 +149,17 @@ func (c *Catalog) newestFanOut(ctx context.Context, desiredItemID string) (FanOu
 // reportedUnsourced is the set of acquire op hashes this node told the origin
 // it can resolve no source for: the ops its own `unsourced` ops cite.
 func (c *Catalog) reportedUnsourced(ctx context.Context) (map[string]bool, error) {
-	var selfKey []byte
-	switch err := c.db.Reader().QueryRowContext(ctx,
-		`SELECT public_key FROM peers WHERE is_self = 1`).Scan(&selfKey); {
-	case errors.Is(err, sql.ErrNoRows):
-	case err != nil:
-		return nil, fmt.Errorf("catalog: reading this node's key: %w", err)
+	self, err := c.selfSigner(ctx)
+	if err != nil {
+		return nil, err
 	}
 	out := map[string]bool{}
-	if len(selfKey) != ed25519.PublicKeySize {
+	if self == "" {
 		return out, nil
 	}
 	rows, err := c.db.Reader().QueryContext(ctx, `
 		SELECT p.value FROM catalog_ops c, json_each(c.prev) p
-		 WHERE c.op = 'unsourced' AND c.signer = ?`,
-		identity.FormatPublicKey(ed25519.PublicKey(selfKey)))
+		 WHERE c.op = 'unsourced' AND c.signer = ?`, self)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: reading this node's reports: %w", err)
 	}
@@ -272,4 +268,172 @@ func (c *Catalog) ListFanOut(ctx context.Context, q FanOutQuery) ([]FanOutEntry,
 		out[i].Reported = reported[out[i].OpHash]
 	}
 	return out, nil
+}
+
+// selfSigner is this node's public key as an op's signer column carries it,
+// "" when this node has no identity key.
+func (c *Catalog) selfSigner(ctx context.Context) (string, error) {
+	var selfKey []byte
+	switch err := c.db.Reader().QueryRowContext(ctx,
+		`SELECT public_key FROM peers WHERE is_self = 1`).Scan(&selfKey); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return "", fmt.Errorf("catalog: reading this node's key: %w", err)
+	}
+	if len(selfKey) != ed25519.PublicKeySize {
+		return "", nil
+	}
+	return identity.FormatPublicKey(ed25519.PublicKey(selfKey)), nil
+}
+
+// Published is the origin's side of fan-out for a want (#799): the acquire op
+// this node signed for it, and what came back from its siblings.
+//
+// What a sibling did with the op is recorded only at that sibling
+// (catalog_op_applications is per node); the one answer that travels back on
+// the op-log is an `unsourced` report, so that is all the origin can show.
+type Published struct {
+	OpHash       string
+	Infohash     string
+	ReleaseTitle string
+	Scope        string
+	Aspect       string
+	Private      bool
+	SelectedAt   time.Time
+	// Unsourced are the current siblings that reported they can resolve no
+	// source for this release, so this node holds it for them to pull.
+	Unsourced []UnsourcedReport
+	// Holds are the hold ops this node signed for the want's work.
+	Holds []PublishedHold
+}
+
+// UnsourcedReport is one sibling's unsourced op for an acquire.
+type UnsourcedReport struct {
+	OpHash     string
+	Site       string
+	ReportedAt time.Time
+}
+
+// PublishedHold is one hold op this node signed: bytes it holds for a
+// sibling to pull over the peer surface.
+type PublishedHold struct {
+	OpHash string
+	Blob   string
+	Scope  string
+	HeldAt time.Time
+}
+
+// PublishedFor reads the newest acquire op this node signed for a want's
+// (work, scope, aspect), the siblings that reported it unsourced, and the
+// holds this node published for the work. found is false when this node
+// published nothing for the want: it has no identity key, never grabbed a
+// torrent for it, or the want came from a sibling.
+func (c *Catalog) PublishedFor(ctx context.Context, desiredItemID string) (Published, bool, error) {
+	self, err := c.selfSigner(ctx)
+	if err != nil || self == "" {
+		return Published{}, false, err
+	}
+	var (
+		ct, wk, scope, aspect, language string
+		editionKey, itemKey             sql.NullString
+	)
+	switch err := c.db.Reader().QueryRowContext(ctx, `
+		SELECT w.content_type, w.work_key, d.scope, d.aspect, d.language, e.edition_key, i.item_key
+		  FROM desired_items d
+		  JOIN works w ON w.id = d.work_id
+		  LEFT JOIN editions e ON e.id = d.edition_id
+		  LEFT JOIN items i ON i.id = d.item_id
+		 WHERE d.id = ?`, desiredItemID).
+		Scan(&ct, &wk, &scope, &aspect, &language, &editionKey, &itemKey); {
+	case errors.Is(err, sql.ErrNoRows):
+		return Published{}, false, nil
+	case err != nil:
+		return Published{}, false, fmt.Errorf("catalog: reading want %s: %w", desiredItemID, err)
+	}
+	opScope, opAspect, err := opScopeAspect(desiredItemID, scope, aspect, language, editionKey, itemKey)
+	if err != nil {
+		return Published{}, false, err
+	}
+
+	ops, err := c.signedOps(ctx, `c.signer = ? AND c.op IN ('acquire', 'hold') AND c.content_type = ? AND c.work_key = ?`,
+		self, ct, wk)
+	if err != nil {
+		return Published{}, false, err
+	}
+	var (
+		out   Published
+		pick  catalogop.Op
+		found bool
+	)
+	for _, op := range ops {
+		if op.Hold != nil {
+			out.Holds = append(out.Holds, PublishedHold{
+				OpHash: op.Hash, Blob: op.Hold.Blob, Scope: op.Hold.Scope, HeldAt: op.Hold.HeldAt,
+			})
+			continue
+		}
+		a := op.Acquire
+		if a == nil || a.Scope != opScope || a.Aspect != opAspect {
+			continue
+		}
+		// The newest selection, ties to the greater hash, as catalogop's view
+		// picks the effective acquire.
+		if found && (a.SelectedAt.Before(pick.Acquire.SelectedAt) ||
+			(a.SelectedAt.Equal(pick.Acquire.SelectedAt) && op.Hash < pick.Hash)) {
+			continue
+		}
+		pick, found = op, true
+	}
+	if !found {
+		return Published{}, false, nil
+	}
+	a := pick.Acquire
+	out.OpHash, out.Infohash, out.ReleaseTitle = pick.Hash, a.Infohash, a.Title
+	out.Scope, out.Aspect, out.Private, out.SelectedAt = a.Scope, a.Aspect, a.Private, a.SelectedAt
+
+	reports, err := c.signedOps(ctx, `c.op = 'unsourced' AND EXISTS
+		(SELECT 1 FROM json_each(c.prev) p WHERE p.value = ?)`, pick.Hash)
+	if err != nil {
+		return Published{}, false, err
+	}
+	for _, r := range reports {
+		if r.Unsourced == nil || r.Unsourced.Acquire != pick.Hash {
+			continue
+		}
+		// A report from anyone but a current sibling makes the origin hold
+		// nothing (IsSiblingKey), so it is not shown as one.
+		sibling, err := c.IsSiblingKey(ctx, r.By)
+		if err != nil {
+			return Published{}, false, err
+		}
+		if sibling {
+			out.Unsourced = append(out.Unsourced, UnsourcedReport{OpHash: r.Hash, Site: r.Unsourced.Site, ReportedAt: r.IssuedAt})
+		}
+	}
+	return out, true, nil
+}
+
+// signedOps reads and verifies the op-log rows matching where, in issue
+// order. A token that does not verify is skipped, as catalogop's view skips it.
+func (c *Catalog) signedOps(ctx context.Context, where string, args ...any) ([]catalogop.Op, error) {
+	//nolint:gosec // where is a literal fragment from this file; every value is bound
+	rows, err := c.db.Reader().QueryContext(ctx,
+		`SELECT c.token FROM catalog_ops c WHERE `+where+` ORDER BY c.iat, c.op_hash`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: reading the op-log: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []catalogop.Op
+	for rows.Next() {
+		var token string
+		if err := rows.Scan(&token); err != nil {
+			return nil, fmt.Errorf("catalog: reading the op-log: %w", err)
+		}
+		op, err := catalogop.Verify(token)
+		if err != nil {
+			continue
+		}
+		out = append(out, op)
+	}
+	return out, rows.Err()
 }

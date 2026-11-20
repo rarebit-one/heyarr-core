@@ -115,7 +115,11 @@ func (s *Server) registerAcquisitionTools() {
 			"it still not here\", without opening the download client. A want a sibling site's " +
 			"choice created carries `fan_out`: the origin site and release, what this site did " +
 			"with it (no_site_source when it could not fetch it), whether it reported that to the " +
-			"origin, and the peer-pull outcome of any hold the origin published for the work.",
+			"origin, and the peer-pull outcome of any hold the origin published for the work. " +
+			"A want whose release this site published to its siblings carries `published`: the " +
+			"acquire op, the sibling sites that reported they could not source it, and the holds " +
+			"this site published so they can pull the bytes. What a sibling otherwise did with it " +
+			"is recorded at that sibling, not here.",
 		InputSchema: schemaDesiredItemID,
 		Handler:     s.getAcquisitionStatus,
 	})
