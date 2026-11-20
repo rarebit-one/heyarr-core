@@ -128,6 +128,9 @@ func replicateSpace(ctx context.Context, local ReadStore, pusher Pusher, t Targe
 	if err != nil {
 		return 0, fmt.Errorf("reading changes for %s: %w", sp.ID, err)
 	}
+	// Missing answers parents first, and the loop stops at the first failure, so a
+	// partial transfer never leaves the target holding a child without its parent
+	// (#682): the next cycle resumes from the target's heads with nothing hidden.
 	missing := protocol.Missing(changes, targetHeads)
 	for _, ch := range missing {
 		if err := pusher.PushChange(ctx, t, ch); err != nil {

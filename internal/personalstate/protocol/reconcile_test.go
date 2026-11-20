@@ -96,7 +96,7 @@ func TestMissingIgnoresUnknownHeads(t *testing.T) {
 }
 
 // TestMissingIsDeterministic: the same have + heads always yield the same,
-// sorted, result — two holders answer one offer identically.
+// ordered, result — two holders answer one offer identically.
 func TestMissingIsDeterministic(t *testing.T) {
 	t.Parallel()
 	have, _ := chain(t, "s", 6)
@@ -111,6 +111,89 @@ func TestMissingIsDeterministic(t *testing.T) {
 				t.Fatalf("Missing order differs at %d", j)
 			}
 		}
+	}
+}
+
+// childBeforeParent builds a parent and a child whose id sorts BEFORE the
+// parent's, the case an id-sorted Missing got wrong (#682).
+func childBeforeParent(t *testing.T, s string) (parent, child protocol.EncryptedChange) {
+	t.Helper()
+	for i := 0; i < 256; i++ {
+		p, err := protocol.NewChange(s, nil, []byte{byte(i), 0x01})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := protocol.NewChange(s, []string{p.ChangeID}, []byte{byte(i), 0x02})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.ChangeID < p.ChangeID {
+			return p, c
+		}
+	}
+	t.Fatal("no child id sorted before its parent's in 256 tries")
+	return
+}
+
+// TestMissingIsTopological: Missing answers every change after its parents, even
+// when a child's id sorts first, whatever order the holder lists its changes in
+// (#682, ADR-0101). A pusher stopping at its first failure then never strands a
+// child without its parent on the target.
+func TestMissingIsTopological(t *testing.T) {
+	t.Parallel()
+	p, c := childBeforeParent(t, "s")
+	other, err := protocol.NewChange("s", nil, []byte("other root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	merge, err := protocol.NewChange("s", []string{c.ChangeID, other.ChangeID}, []byte("merge"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	orders := [][]protocol.EncryptedChange{
+		{p, c, other, merge},
+		{merge, c, other, p},
+		{c, merge, p, other},
+	}
+	var first []string
+	for _, have := range orders {
+		got := protocol.Missing(have, nil)
+		pos := make(map[string]int, len(got))
+		var ids []string
+		for i, ch := range got {
+			pos[ch.ChangeID] = i
+			ids = append(ids, ch.ChangeID)
+		}
+		if len(got) != 4 {
+			t.Fatalf("Missing returned %d changes, want 4", len(got))
+		}
+		for _, ch := range got {
+			for _, parent := range ch.Parents {
+				if pos[parent] > pos[ch.ChangeID] {
+					t.Fatalf("change %s came before its parent %s", ch.ChangeID, parent)
+				}
+			}
+		}
+		if first == nil {
+			first = ids
+			continue
+		}
+		for i := range ids {
+			if ids[i] != first[i] {
+				t.Fatalf("the order depends on how the holder listed its changes: %v vs %v", ids, first)
+			}
+		}
+	}
+}
+
+// TestMissingOrdersAroundAParentTheTargetHolds: a parent outside the answer (the
+// target holds it, or it was compacted) does not hold its child back.
+func TestMissingOrdersAroundAParentTheTargetHolds(t *testing.T) {
+	t.Parallel()
+	have, ids := chain(t, "s", 4)
+	got := protocol.Missing(have, []string{ids[1]})
+	if len(got) != 2 || got[0].ChangeID != ids[2] || got[1].ChangeID != ids[3] {
+		t.Fatalf("Missing beneath a known midpoint = %v, want [%s %s]", got, ids[2], ids[3])
 	}
 }
 
