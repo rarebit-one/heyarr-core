@@ -72,6 +72,10 @@ type Blob struct {
 	ReleaseCause string
 }
 
+// unwantedRelease is a released blob that nothing references: the one state in
+// which its bytes going missing loses nothing (#910).
+func (b Blob) unwantedRelease() bool { return !b.ReleasedAt.IsZero() && b.References == 0 }
+
 // Corruption is a blob whose bytes no longer hash to their own name, together
 // with where those bytes were preserved.
 type Corruption struct {

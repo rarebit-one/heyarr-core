@@ -615,6 +615,7 @@ func printCollection(w io.Writer, result integrity.Collection, asJSON bool) erro
 	fmt.Fprintf(w, "  window started      %d\n", len(result.Marked))
 	fmt.Fprintf(w, "  waiting out window  %d\n", len(result.Waiting))
 	fmt.Fprintf(w, "  reclaimed           %d\n", len(result.Reclaimed))
+	fmt.Fprintf(w, "  rows reconciled     %d\n", len(result.Reconciled))
 	fmt.Fprintf(w, "  untracked files     %d\n", len(result.Untracked))
 	fmt.Fprintf(w, "  partial writes      %d\n", len(result.TempRemoved))
 	fmt.Fprintf(w, "  spared              %d\n", len(result.Spared)+len(result.UntrackedSpared))
@@ -662,13 +663,20 @@ func printCollection(w io.Writer, result integrity.Collection, asJSON bool) erro
 			fmt.Fprintf(w, "  untracked     %s  %d bytes\n", c.Hash, c.Size)
 		}
 	}
+	if len(result.Reconciled) > 0 {
+		fmt.Fprintln(w)
+		for _, c := range result.Reconciled {
+			fmt.Fprintf(w, "  reconciled    %s  released, bytes already gone\n", c.Hash)
+		}
+	}
 	if len(result.Waiting) > 0 {
 		fmt.Fprintln(w)
 		for _, c := range result.Waiting {
 			fmt.Fprintf(w, "  waiting       %s  eligible %s\n", c.Hash, c.EligibleAt.Format(time.RFC3339))
 		}
 	}
-	if result.DryRun && (len(result.Reclaimed) > 0 || len(result.Untracked) > 0 || len(result.TempRemoved) > 0) {
+	if result.DryRun && (len(result.Reclaimed) > 0 || len(result.Reconciled) > 0 ||
+		len(result.Untracked) > 0 || len(result.TempRemoved) > 0) {
 		fmt.Fprintf(w, "\nNothing was removed. Re-run with --apply to reclaim.\n")
 	}
 	return nil

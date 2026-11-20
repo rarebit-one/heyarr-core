@@ -19,6 +19,12 @@ type FindingKind string
 const (
 	// KindMissing is a catalog row whose bytes are not in the store.
 	KindMissing FindingKind = "missing"
+	// KindReleasedMissing is a RELEASED vault blob, wanted by nothing, whose
+	// bytes are not in the store (#910). Not damage: nobody asked for these
+	// bytes any more, and losing them loses nothing anyone holds. It is the
+	// leftover an interrupted reclaim can leave, and garbage collection drops
+	// the row once the grace window has passed.
+	KindReleasedMissing FindingKind = "released_missing"
 	// KindSizeMismatch is a file whose length is not what the catalog recorded.
 	// It is damage on its own evidence: the bytes cannot be the bytes.
 	KindSizeMismatch FindingKind = "size_mismatch"
@@ -43,7 +49,7 @@ func (k FindingKind) Damage() bool {
 	switch k {
 	case KindMissing, KindSizeMismatch, KindCorrupt:
 		return true
-	case KindUntracked, KindOrphanTemp:
+	case KindUntracked, KindOrphanTemp, KindReleasedMissing:
 		return false
 	default:
 		return false
@@ -208,15 +214,8 @@ func (c *Checker) checkOne(ctx context.Context, b Blob, deep bool) (*Finding, in
 	desc, err := c.opts.Store.Stat(ctx, b.Hash)
 	switch {
 	case errors.Is(err, cas.ErrNotFound):
-		if err := c.opts.Catalog.MarkMissing(ctx, b.Hash, c.opts.Clock.Now()); err != nil {
-			return nil, 0, err
-		}
-		return &Finding{
-			Kind:         KindMissing,
-			Hash:         b.Hash.String(),
-			ExpectedSize: b.Size,
-			Detail:       "the catalog has this blob but the store does not",
-		}, 0, nil
+		f, err := c.missing(ctx, b, c.opts.Clock.Now(), "the catalog has this blob but the store does not")
+		return f, 0, err
 	case err != nil:
 		return nil, 0, err
 	}
@@ -252,6 +251,36 @@ func (c *Checker) checkOne(ctx context.Context, b Blob, deep bool) (*Finding, in
 		return nil, 0, nil
 	}
 	return c.verify(ctx, b)
+}
+
+// missing records that a catalog blob's bytes are not in the store, and says
+// whether that is damage.
+//
+// The replica row is corrected either way, so nothing goes on believing this
+// peer holds the bytes. What differs is the finding: a blob something still
+// wants is content the operator has lost, while a released one nothing wants
+// is the leftover of a reclaim that removed the bytes and never got to the row
+// (#910). Reporting the second as damage would page someone over bytes nobody
+// asked to keep, and teach them to ignore the first.
+func (c *Checker) missing(ctx context.Context, b Blob, at time.Time, detail string) (*Finding, error) {
+	if err := c.opts.Catalog.MarkMissing(ctx, b.Hash, at); err != nil {
+		return nil, err
+	}
+	if b.unwantedRelease() {
+		return &Finding{
+			Kind:         KindReleasedMissing,
+			Hash:         b.Hash.String(),
+			ExpectedSize: b.Size,
+			Detail: "released, and its bytes are already gone — nothing wants them, so this is " +
+				"not loss; garbage collection drops the row once the grace window has passed",
+		}, nil
+	}
+	return &Finding{
+		Kind:         KindMissing,
+		Hash:         b.Hash.String(),
+		ExpectedSize: b.Size,
+		Detail:       detail,
+	}, nil
 }
 
 // verify re-hashes one blob, recording the outcome either way.
@@ -291,15 +320,8 @@ func (c *Checker) verify(ctx context.Context, b Blob) (*Finding, int64, error) {
 	case errors.Is(err, cas.ErrNotFound):
 		// It existed a moment ago. Something is deleting under us, which is
 		// worth reporting as loss rather than swallowing.
-		if err := c.opts.Catalog.MarkMissing(ctx, b.Hash, now); err != nil {
-			return nil, 0, err
-		}
-		return &Finding{
-			Kind:         KindMissing,
-			Hash:         b.Hash.String(),
-			ExpectedSize: b.Size,
-			Detail:       "the blob disappeared during the check",
-		}, 0, nil
+		f, err := c.missing(ctx, b, now, "the blob disappeared during the check")
+		return f, 0, err
 
 	case errors.Is(err, cas.ErrCorrupt):
 		// Corrupt, but quarantining failed, so there is no path to record.

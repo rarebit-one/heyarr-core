@@ -342,6 +342,21 @@ stable.
   alternative.
 
 ### Fixed
+- **`heyarr gc --apply` no longer dies partway beside a running server**
+  (#910). Host commands that open the controller database directly now wait,
+  for up to a minute, when the server holds its write lock past the 5-second
+  busy timeout. Before, one long write on the server's side ended a sweep with
+  `sqlite: beginning transaction: database is locked (SQLITE_BUSY)`. Only
+  beginning a transaction is retried, because nothing has run yet at that
+  point. Marking and clearing grace windows now commit in batches of 500, so a
+  sweep over a whole library no longer holds the lock for that long itself.
+- **fsck no longer reports a released vault blob with no bytes as damage**
+  (#910). A released blob that nothing references, and whose bytes are gone,
+  is now the non-damage finding `released_missing`. Once its grace window has
+  passed, `gc` drops the row and lists it under `reconciled`, on either
+  profile. The media profile's last-copy rule used to spare such a row forever,
+  with no bytes behind it. A blob that is not released and has lost its bytes
+  is still `missing` damage.
 - **`mnemosyne device revoke` works against a Mnemosyne node** (#914). The
   personal profile (ADR-0107) did not mount `DELETE
   /api/v1/identities/devices/{key}`, so the command answered `no route matches
