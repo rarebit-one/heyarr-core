@@ -1,6 +1,6 @@
 # 0128. A member's device writes to the spaces whose current key it holds
 
-**Status:** Accepted by Jaryl 2026-11-21 (director-relayed)
+**Status:** Accepted (2026-11-21, the owner's decision on #766, relayed by the director)
 **Date:** 2026-11-21
 **Refines:** [ADR-0067](0067-a-paired-device-enrols-itself-and-earns-only-the-read-floor.md) (answers its revisit trigger with a per-space rule)
 **Builds on:** ADR-0065 (write by management authorisation), ADR-0096 (blind placement pins, provisional upload pins), ADR-0103 (key epochs), ADR-0104 (per-space grants for executors), ADR-0108 (membership)
