@@ -1,6 +1,6 @@
 # 0067. A paired device enrols itself, and earns only the read floor
 
-**Status:** Accepted
+**Status:** Accepted (refined by [ADR-0128](0128-a-members-device-writes-to-the-spaces-whose-current-key-it-holds.md))
 **Date:** 2026-09-02
 **Builds on:** ADR-0022 (enrolment is pairing), ADR-0032 (device keys land before they authorise anything), ADR-0048 (device-cert authentication), ADR-0065 (an enrolled device earns write by admin authorisation), ADR-0066 (the node hosts the Voidbind relay)
 
@@ -74,3 +74,13 @@ nothing beyond enrolment.**
   *user's* signature; authority remains the admin's.
 - **A public-route rate limiter.** When one lands, `/enrol` joins it; the ADR
   above does not need to change.
+
+## Refinement: a member's device writes to its spaces (2026-11-21, ADR-0128)
+
+The first revisit trigger above came due on #766, and the answer is narrower
+than "any of my devices may write". ADR-0128 lets a device write to a space
+whose current key it holds and whose membership admits its user, per request
+and per space, plus the vault uploads and pins that need no space. Enrolment
+here still grants nothing: membership, an owner's act on their own device, is
+what lifts a device. This route therefore stays the non-granting endpoint this
+record draws it as.

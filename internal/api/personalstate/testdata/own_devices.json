@@ -1,6 +1,7 @@
 {
   "space_id": "0199a0a0-0000-7000-8000-000000000049",
   "key_epoch": 0,
+  "member_write": true,
   "devices": [
     {
       "id": "d-bbbb1111",

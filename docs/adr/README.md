@@ -73,7 +73,7 @@ An ADR that merely describes the code is not worth having.
 | [0063](0063-a-followed-article-is-archived-as-a-self-contained-single-file.md) | A followed article is archived as a self-contained single file | Accepted |
 | [0064](0064-a-followed-source-is-routed-to-its-adapter-by-type.md) | A followed source is routed to its adapter by type | Accepted |
 | [0066](0066-the-node-hosts-the-voidbind-relay-beside-its-legacy-pair-relay.md) | The node hosts the Voidbind relay beside its legacy pair relay | Accepted (amended: the legacy relay is retired) |
-| [0067](0067-a-paired-device-enrols-itself-and-earns-only-the-read-floor.md) | A paired device enrols itself, and earns only the read floor | Accepted |
+| [0067](0067-a-paired-device-enrols-itself-and-earns-only-the-read-floor.md) | A paired device enrols itself, and earns only the read floor | Accepted (refined by 0128: a member's device writes to the spaces whose current key it holds) |
 | [0068](0068-membership-ops-replace-root-only-certs.md) | Membership ops replace root-only certs | Accepted |
 | [0069](0069-a-client-that-cannot-decode-the-source-gets-an-on-the-fly-repackage.md) | A client that cannot decode the source gets an on-the-fly repackage | Accepted (amended by 0126: also a seekable HLS presentation) |
 | [0070](0070-a-device-refusal-hints-only-at-a-clock.md) | A device refusal hints only at a clock, a proof's life is capped, and a session dies with its approver | Accepted |
@@ -122,3 +122,4 @@ An ADR that merely describes the code is not worth having.
 | [0125](0125-an-hdr-re-encode-for-an-sdr-screen-is-tone-mapped.md) | An HDR re-encode for an SDR screen is tone-mapped, and one that cannot be is refused | Accepted |
 | [0126](0126-a-stream-plan-is-also-a-seekable-hls-presentation.md) | A stream plan is also a seekable HLS presentation, cut where every run cuts it | Accepted |
 | [0127](0127-a-library-type-heyarr-does-not-understand-is-retyped-by-its-operator.md) | A library type Heyarr does not understand is retyped by its operator | Accepted |
+| [0128](0128-a-members-device-writes-to-the-spaces-whose-current-key-it-holds.md) | A member's device writes to the spaces whose current key it holds | Accepted |

@@ -108,13 +108,20 @@ func membersAPI(t *testing.T, members MemberResolver) *API {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var memberWrites httpapi.MemberWrites
+	if members != nil {
+		if memberWrites, err = NewMemberWriteAuthority(st, members); err != nil {
+			t.Fatal(err)
+		}
+	}
 	api, err := New(Options{
 		Store: st,
 		Authorizer: fakeAuthorizer{
 			allowed:  map[string]bool{ownerKey: true, bobKey1: true, bobKey2: true, eveKey: true, recoveryKey: true},
 			recovery: map[string]bool{recoveryKey: true},
 		},
-		Members: members,
+		Members:      members,
+		MemberWrites: memberWrites,
 	})
 	if err != nil {
 		t.Fatal(err)

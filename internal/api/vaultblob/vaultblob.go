@@ -28,7 +28,6 @@ import (
 
 	httpapi "github.com/rarebit-one/heyarr-core/internal/api/http"
 	"github.com/rarebit-one/heyarr-core/internal/api/problem"
-	"github.com/rarebit-one/heyarr-core/internal/auth"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 	"github.com/rarebit-one/heyarr-core/internal/storagefabric/cas"
 )
@@ -99,6 +98,10 @@ type Options struct {
 	// on some space (ADR-0104). Optional; nil refuses every restricted caller.
 	// Every other caller is unaffected.
 	Grants httpapi.SpaceWriteGrants
+	// Members lifts a read-floor Device credential to upload and confirm while
+	// it is a writing member of some space (ADR-0128). Optional; nil keeps both
+	// routes at the write scope, as before.
+	Members httpapi.MemberWrites
 	// ProvisionalPins makes an upload's pin provisional for ProvisionalTTL
 	// until its writer confirms it (placement.provisional_upload_pins, #714).
 	// Off — the default during rollout — every upload pin is permanent, as
@@ -117,6 +120,7 @@ type Handler struct {
 	log      *slog.Logger
 	maxBytes int64
 	grants   httpapi.SpaceWriteGrants
+	members  httpapi.MemberWrites
 
 	provisional bool
 	now         func() time.Time
@@ -153,6 +157,7 @@ func New(opts Options) (*Handler, error) {
 		log:      log.With("component", "vaultblob-api"),
 		maxBytes: maxBytes,
 		grants:   opts.Grants,
+		members:  opts.Members,
 
 		provisional: opts.ProvisionalPins,
 		now:         now,
@@ -167,15 +172,17 @@ type uploadResult struct {
 }
 
 // Mount registers the ingest route on the authenticated /api/v1 router. Storing a
-// vault blob needs the `write` scope (ADR-0096: a device with write scope, ADR-0065/0067).
+// vault blob needs the `write` scope (ADR-0096: a device with write scope,
+// ADR-0065/0067), or a device that is a writing member of some space
+// (ADR-0128) — a blob names no space, so "some space" is the check.
 func (h *Handler) Mount(r chi.Router) {
-	r.With(httpapi.RequireScope(auth.ScopeWrite), httpapi.RequireRestrictedWriteGrant(h.grants)).
-		Method(http.MethodPut, "/vault/blobs/{hash}", http.HandlerFunc(h.upload))
+	gate := r.With(httpapi.RequireWriteOrMember(h.members, ""), httpapi.RequireRestrictedWriteGrant(h.grants))
+	gate.Method(http.MethodPut, "/vault/blobs/{hash}", http.HandlerFunc(h.upload))
 	// Confirming makes upload pins permanent once the change naming them is
 	// accepted (ADR-0096 amendment, #714). Same gate as uploading: a restricted
-	// executor that may upload may confirm, and only what it uploaded itself.
-	r.With(httpapi.RequireScope(auth.ScopeWrite), httpapi.RequireRestrictedWriteGrant(h.grants)).
-		Post("/vault/blobs/confirm", h.confirm)
+	// executor, or a member's device, that may upload may confirm — and only
+	// what its own principal uploaded.
+	gate.Post("/vault/blobs/confirm", h.confirm)
 }
 
 // upload receives a client-encrypted, content-addressed ciphertext blob at the id
@@ -292,7 +299,10 @@ func (h *Handler) confirm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id, _ := httpapi.IdentityFrom(r.Context())
-	results, err := h.pinner.ConfirmUploadPins(r.Context(), h.selfPeer, in.Blobs, id.Principal.ID, id.Restricted)
+	// A member's device confirms only its own user's uploads, as an executor
+	// confirms only its own (ADR-0128): a pin someone else took stays theirs.
+	ownOnly := id.Restricted || httpapi.MemberLifted(r.Context())
+	results, err := h.pinner.ConfirmUploadPins(r.Context(), h.selfPeer, in.Blobs, id.Principal.ID, ownOnly)
 	if err != nil {
 		h.log.Error("confirming upload pins", "count", len(in.Blobs), "error", err)
 		httpapi.Fail(w, r, problem.Internal())

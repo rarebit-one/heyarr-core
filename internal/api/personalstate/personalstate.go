@@ -46,6 +46,7 @@ type API struct {
 	principals PrincipalResolver
 	recipients PrincipalRecipients
 	members    MemberResolver
+	memberW    httpapi.MemberWrites
 	log        *slog.Logger
 }
 
@@ -114,7 +115,11 @@ type Options struct {
 	// the device keys they hold (ADR-0108). Optional: nil leaves the members
 	// API answering 503 and membership out of the wrap gate.
 	Members MemberResolver
-	Logger  *slog.Logger
+	// MemberWrites lifts a read-floor Device credential to write a change on a
+	// space it is a writing member of (ADR-0128). Optional: nil keeps every
+	// push at the write scope, as before.
+	MemberWrites httpapi.MemberWrites
+	Logger       *slog.Logger
 }
 
 // New builds the API. It fails if no store is given rather than mounting routes
@@ -130,7 +135,8 @@ func New(opts Options) (*API, error) {
 	return &API{
 		store: opts.Store, replicator: opts.Replicator, authorizer: opts.Authorizer,
 		principals: opts.Principals, recipients: opts.Recipients, members: opts.Members,
-		log: log.With("component", "personalstate-api"),
+		memberW: opts.MemberWrites,
+		log:     log.With("component", "personalstate-api"),
 	}, nil
 }
 
@@ -244,7 +250,10 @@ func (a *API) Mount(r chi.Router) {
 	write := r.With(httpapi.RequireScope(auth.ScopeWrite))
 	admin := r.With(httpapi.RefuseRestricted, httpapi.RequireScope(auth.ScopeAdmin))
 	write.With(httpapi.RefuseRestricted).Post("/spaces", a.createSpace)
-	write.Post("/spaces/{id}/changes", a.putChange)
+	// A change is the one push a member's device may make with no write scope
+	// (ADR-0128): on a space whose current key it holds and whose membership
+	// admits its user, and only conditionally on the key epoch (putChange).
+	r.With(httpapi.RequireWriteOrMember(a.memberW, "id")).Post("/spaces/{id}/changes", a.putChange)
 	// Re-wrapping a space's key for the remaining recipients after a rotation
 	// stores ciphertext copies, exactly as create does — a write. The revoked
 	// device's copy is DELETED separately, an authority action that removes access,
@@ -579,6 +588,14 @@ func (a *API) putChange(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		err = a.store.PutChangeAtEpoch(r.Context(), ch, epoch)
+	} else if httpapi.MemberLifted(r.Context()) {
+		// A member's device writes only under the space's current key
+		// (ADR-0128), so its push must say which key sealed it.
+		httpapi.Fail(w, r, problem.New(http.StatusPreconditionRequired, problem.TypeBadRequest,
+			"Precondition Required",
+			"a device writing as a space member must name the key epoch its change was sealed at (?key_epoch=N, ADR-0128)").
+			WithCode(CodeKeyEpochRequired))
+		return
 	} else {
 		err = a.store.PutChange(r.Context(), ch)
 	}

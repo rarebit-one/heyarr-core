@@ -32,6 +32,10 @@ const (
 	// another epoch than the space's current one (#712). Re-open the space and
 	// re-seal under the current key.
 	CodeChangeKeyEpochMismatch = "change_key_epoch_mismatch"
+	// CodeKeyEpochRequired (428, the one that is not a 409): a device writing
+	// as a space member (ADR-0128) pushed a change without ?key_epoch=. Send
+	// the epoch whose key sealed it.
+	CodeKeyEpochRequired = "key_epoch_required"
 	// CodeRotationDropsRecovery: a rotation left out a recovery key that holds a
 	// copy of the current key (ADR-0022, ADR-0103).
 	CodeRotationDropsRecovery = "rotation_drops_recovery_key"
