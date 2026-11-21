@@ -356,6 +356,38 @@ func TestStateSnapshotPushRejectsForgedID(t *testing.T) {
 	}
 }
 
+// TestStateSnapshotPushAcceptsMoreThanAChangeBody: a sibling replicating a
+// snapshot a device could push must be able to store it, so the peer route shares
+// the device route's protocol.MaxSnapshotBody instead of a change's 1 MiB.
+//
+// SABOTAGE: bound handleStateSnapshotPush by maxStateChangeBody (1 MiB) again, and the
+// push below is refused.
+func TestStateSnapshotPushAcceptsMoreThanAChangeBody(t *testing.T) {
+	t.Parallel()
+	const space = "0199ffff-0000-7000-8000-00000000b16b"
+	a := newPeerNode(t, "peer-a-id", "peer-a")
+	b := newPeerNode(t, "peer-b-id", "peer-b")
+	root := newTrustRoot(a.member(), b.member())
+
+	st := &stubState{changes: map[string][]protocol.EncryptedChange{space: nil}}
+	l := serveState(t, a, root, st)
+	client := dialler(t, b, root)
+
+	// Three times a change's 1 MiB bound.
+	big := mustSnapshot(t, space, nil, bytes.Repeat([]byte{0x5A}, 3<<20))
+	payload, err := json.Marshal(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, body, _, err := peerSend(t, client, http.MethodPost, stateURL(l, space, "/snapshots"), string(payload))
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("POST a %d-byte snapshot: status=%d err=%v\n%.200s", len(payload), status, err, body)
+	}
+	if st.gotSnap == nil || st.gotSnap.SnapshotID != big.SnapshotID {
+		t.Fatalf("peer did not store the large snapshot")
+	}
+}
+
 // TestStateChangesMissingFiltersByHave: offering a head suppresses the changes it
 // already covers — the incremental pull (protocol.Missing), computed without
 // decryption.

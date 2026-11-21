@@ -8,7 +8,8 @@ package peerapi
 
 import (
 	"encoding/json"
-	"io"
+	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -66,9 +67,17 @@ func (s *Server) handleStateSnapshotPush(w http.ResponseWriter, r *http.Request)
 	spaceID := chi.URLParam(r, "space")
 
 	var snap protocol.EncryptedSnapshot
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxStateChangeBody))
+	// The device route's bound, so a snapshot a device could push replicates. A
+	// MaxBytesReader, not a LimitReader: an oversized body is named as such rather
+	// than surfacing as a truncated-JSON error.
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, protocol.MaxSnapshotBody))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&snap); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			httpapi.Fail(w, r, problem.BadRequest(fmt.Sprintf("the snapshot body is larger than %d bytes", protocol.MaxSnapshotBody)))
+			return
+		}
 		httpapi.Fail(w, r, problem.BadRequest("the snapshot body must be a JSON encrypted snapshot: "+err.Error()))
 		return
 	}
