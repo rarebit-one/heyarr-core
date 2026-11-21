@@ -54,8 +54,13 @@ type ownDevicesView struct {
 	SpaceID string `json:"space_id"`
 	// KeyEpoch is the space's current key epoch (ADR-0103), the one a wrap
 	// for a device lacking a copy must seal.
-	KeyEpoch int             `json:"key_epoch"`
-	Devices  []ownDeviceView `json:"devices"`
+	KeyEpoch int `json:"key_epoch"`
+	// MemberWrite is true when the calling device may push changes to this
+	// space with its own credential as a writing member (ADR-0128). A node
+	// that predates ADR-0128 omits it, which is how a client knows to keep
+	// using a write token there.
+	MemberWrite bool            `json:"member_write"`
+	Devices     []ownDeviceView `json:"devices"`
 }
 
 func (a *API) listOwnDevices(w http.ResponseWriter, r *http.Request) {
@@ -81,13 +86,21 @@ func (a *API) listOwnDevices(w http.ResponseWriter, r *http.Request) {
 		httpapi.Fail(w, r, problem.Internal())
 		return
 	}
+	var memberWrite bool
+	if a.memberW != nil {
+		if memberWrite, err = a.memberW.MemberMayWrite(r.Context(), id.Principal.ID, id.DeviceKey, spaceID); err != nil {
+			a.log.Error("checking member write", "request_id", httpapi.RequestIDFrom(r.Context()), "error", err)
+			httpapi.Fail(w, r, problem.Internal())
+			return
+		}
+	}
 	held := make(map[string]bool, len(keys))
 	for _, k := range keys {
 		if k.Epoch == epoch {
 			held[k.Recipient] = true
 		}
 	}
-	out := ownDevicesView{SpaceID: spaceID, KeyEpoch: epoch, Devices: make([]ownDeviceView, 0, len(devices))}
+	out := ownDevicesView{SpaceID: spaceID, KeyEpoch: epoch, MemberWrite: memberWrite, Devices: make([]ownDeviceView, 0, len(devices))}
 	for _, d := range devices {
 		out.Devices = append(out.Devices, ownDeviceView{
 			ID: d.ID, Name: d.Name, DeviceKey: d.DeviceKey, Recipient: d.EncryptionKey,

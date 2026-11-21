@@ -1430,6 +1430,13 @@ paths:
                     type: integer
                     minimum: 0
                     description: The space's current key epoch, which a wrap for a device lacking a copy must seal.
+                  member_write:
+                    type: boolean
+                    description: |
+                      True when the calling device may push changes to this
+                      space with its own credential, as a writing member
+                      (ADR-0128). A node that predates ADR-0128 omits it; a
+                      client then keeps using a write token there.
                   devices:
                     type: array
                     items:
@@ -1617,11 +1624,17 @@ paths:
     post:
       tags: [personal-state]
       operationId: putSpaceChange
-      summary: Store one encrypted change; the peer verifies its content-address. Requires `write`.
+      summary: Store one encrypted change; the peer verifies its content-address. Requires `write`, or a member's device (ADR-0128).
       description: |
         The peer re-derives the change's blake3 id over its space, parents and
         ciphertext and refuses a mismatch — it never trusts a claimed id
         (Invariant 1). It stores the ciphertext without decrypting it.
+
+        A Device credential at the read floor may push here when its device
+        holds a copy of the space's current key and the space's membership
+        admits its user (ADR-0128). Such a push must carry `key_epoch`
+        (`428 key_epoch_required` without it); a device that is not a writing
+        member of the space gets `403 space_not_member`.
 
         With `key_epoch` the push is conditional (ADR-0103, #712): the peer
         stores the change only while that is still the space's current key
@@ -1662,6 +1675,13 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "428":
+          description: >-
+            A device writing as a space member (ADR-0128) sent no `key_epoch`.
+            The problem carries code `key_epoch_required`.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /api/v1/spaces/{id}/snapshot:
     get:
@@ -3343,7 +3363,7 @@ paths:
     put:
       tags: [personal-state]
       operationId: uploadVaultBlob
-      summary: Upload a client-encrypted, content-addressed vault blob and pin it. Requires `write`.
+      summary: Upload a client-encrypted, content-addressed vault blob and pin it. Requires `write`, or a member's device (ADR-0128).
       description: >-
         The vault content ingest path (ADR-0021, ADR-0096), deliberately separate
         from scan-ingest and from the read-only blob GET contract. The client
@@ -3352,6 +3372,8 @@ paths:
         `{hash}`, stores them, and records a placement pin so garbage collection
         retains them — a vault blob has no catalog reference the control plane can
         see. The server never holds plaintext. Reads use `GET /blobs/{hash}/content`.
+        A Device credential at the read floor may upload while it is a writing
+        member of some space (ADR-0128); otherwise `403 space_not_member`.
       requestBody:
         required: true
         content:
@@ -3389,7 +3411,7 @@ paths:
     post:
       tags: [personal-state]
       operationId: confirmVaultBlobs
-      summary: Make this node's upload pins on the named blobs permanent. Requires `write`.
+      summary: Make this node's upload pins on the named blobs permanent. Requires `write`, or a member's device (ADR-0128).
       description: >-
         ADR-0096 amendment (#714). With `placement.provisional_upload_pins` on, an
         upload's pin is provisional for 24 hours and then released to garbage
@@ -3398,7 +3420,8 @@ paths:
         never before. Confirming is idempotent and never removes anything, and it
         is served whether or not the flag is on, so a client can always send it.
         Each blob is answered on its own. A restricted executor (ADR-0104) may
-        confirm only blobs it uploaded itself.
+        confirm only blobs it uploaded itself, and so may a member's device
+        (ADR-0128): only blobs its own user uploaded.
       requestBody:
         required: true
         content:
@@ -3450,7 +3473,7 @@ paths:
     post:
       tags: [personal-state]
       operationId: pinVaultPlacement
-      summary: Pin a vault blob to a peer OTHER than self, so it replicates there. Requires `write`.
+      summary: Pin a vault blob to a peer OTHER than self, so it replicates there. Requires `write`, or a member's device (ADR-0128).
       description: >-
         Cross-site placement (ADR-0096). A device says a ciphertext vault blob
         should live on a named peer; the convergence union turns the pin into a
@@ -3460,6 +3483,8 @@ paths:
         peer, never which vault or file it is. Idempotent per (blob, peer). The peer
         is not checked for existence: a pin may outlive churn in `peers`, and a pin
         naming a peer that is not a replication target is simply ignored.
+        A Device credential at the read floor may pin while it is a writing
+        member of some space (ADR-0128). Removing a pin is never lifted.
       requestBody:
         required: true
         content:
@@ -8422,6 +8447,20 @@ components:
 
         Scopes are ordered — `admin` implies `write` implies `read`. Every
         route under /api/v1 requires at least `read`.
+
+    deviceCredential:
+      type: http
+      scheme: Device
+      description: |
+        An enrolled device's cert and a fresh possession proof, presented as
+        `Authorization: Device <cert>~<proof>` (ADR-0048). It authenticates as
+        the device's user at the `read` floor (ADR-0067). A management
+        authorisation (ADR-0065) or a sibling's lease lifts it to `write`. A
+        device that holds a space's current key, and whose user the space's
+        membership admits, may also push changes to that space and upload,
+        confirm and pin vault blobs, per request (ADR-0128). A proof is valid
+        for the window it names, at most ten minutes: a 401 after idling means
+        present a new proof, not enrol again.
 
     peerCertificate:
       type: mutualTLS

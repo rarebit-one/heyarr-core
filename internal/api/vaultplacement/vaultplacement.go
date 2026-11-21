@@ -71,6 +71,10 @@ type Options struct {
 	// grant on some space (ADR-0104). Optional; nil refuses every restricted
 	// caller. Every other caller is unaffected.
 	Grants httpapi.SpaceWriteGrants
+	// Members lets a read-floor Device credential record a pin while it is a
+	// writing member of some space (ADR-0128). Optional; nil keeps pinning at
+	// the write scope. Removing a pin is never lifted.
+	Members httpapi.MemberWrites
 	// Status reads a blob's placement status for GET
 	// /vault/blobs/{hash}/placement (ADR-0114). Optional.
 	Status StatusReader
@@ -78,10 +82,11 @@ type Options struct {
 
 // Handler serves the device-facing placement-pin routes.
 type Handler struct {
-	pinner Pinner
-	log    *slog.Logger
-	grants httpapi.SpaceWriteGrants
-	status StatusReader
+	pinner  Pinner
+	log     *slog.Logger
+	grants  httpapi.SpaceWriteGrants
+	members httpapi.MemberWrites
+	status  StatusReader
 }
 
 // New builds the handler, failing at construction if the pinner is missing.
@@ -93,7 +98,10 @@ func New(opts Options) (*Handler, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Handler{pinner: opts.Pinner, log: log.With("component", "vaultplacement-api"), grants: opts.Grants, status: opts.Status}, nil
+	return &Handler{
+		pinner: opts.Pinner, log: log.With("component", "vaultplacement-api"),
+		grants: opts.Grants, members: opts.Members, status: opts.Status,
+	}, nil
 }
 
 // Mount registers the routes on the authenticated /api/v1 router. Recording or
@@ -103,8 +111,11 @@ func New(opts Options) (*Handler, error) {
 func (h *Handler) Mount(r chi.Router) {
 	// A restricted caller (ADR-0104) may add a pin while it holds a write grant,
 	// so the content it pushes is placed like anyone's; it may never remove one,
-	// because unpinning is how a blob becomes eligible for collection.
-	r.With(httpapi.RequireScope(auth.ScopeWrite), httpapi.RequireRestrictedWriteGrant(h.grants)).Post("/vault/placements", h.pin)
+	// because unpinning is how a blob becomes eligible for collection. A
+	// member's device (ADR-0128) is held to the same line: it may pin while it
+	// is a writing member of some space, and removing a pin stays `write`.
+	r.With(httpapi.RequireWriteOrMember(h.members, ""), httpapi.RequireRestrictedWriteGrant(h.grants)).
+		Post("/vault/placements", h.pin)
 	r.With(httpapi.RefuseRestricted, httpapi.RequireScope(auth.ScopeWrite)).Delete("/vault/placements", h.unpin)
 	// Where a blob is wanted and held (ADR-0114). Read scope, and the same
 	// restricted-caller gate as pinning: a writer that may place a blob may

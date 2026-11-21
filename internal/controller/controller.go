@@ -1233,6 +1233,13 @@ func (c *Controller) contentRoutes(d mountDeps, queue *jobs.Queue, cat *catalog.
 	if err != nil {
 		return nil, nil, fmt.Errorf("controller: opening the space-grant store: %w", err)
 	}
+	// A read-floor device may upload, confirm and pin while it is a writing
+	// member of some space (ADR-0128): its user a member, the device holding
+	// the space's current key.
+	memberWrites, err := personalstateapi.NewMemberWriteAuthority(grants, d.identities)
+	if err != nil {
+		return nil, nil, fmt.Errorf("controller: %w", err)
+	}
 	blobHandler, err := blobs.New(blobs.Options{
 		Store:      d.blobStore,
 		Logger:     c.log,
@@ -1255,6 +1262,7 @@ func (c *Controller) contentRoutes(d mountDeps, queue *jobs.Queue, cat *catalog.
 		SelfPeer: d.selfPeerID,
 		Logger:   c.log,
 		Grants:   grants,
+		Members:  memberWrites,
 		// Off by default during rollout (ADR-0096 amendment, #714).
 		ProvisionalPins: c.cfg.Placement.ProvisionalUploadPins,
 	})
@@ -1269,9 +1277,10 @@ func (c *Controller) contentRoutes(d mountDeps, queue *jobs.Queue, cat *catalog.
 	// pairs to the same catalog, so it is the placement counterpart to
 	// vaultBlobHandler above, which pins an upload to THIS node.
 	vaultPlacementHandler, err := vaultplacement.New(vaultplacement.Options{
-		Pinner: cat,
-		Logger: c.log,
-		Grants: grants,
+		Pinner:  cat,
+		Logger:  c.log,
+		Grants:  grants,
+		Members: memberWrites,
 		// Where a blob is wanted and held (ADR-0114), for a client waiting
 		// until a blob is safe at both sites.
 		Status: placementStatus{cat: cat, siblings: c.cfg.Placement.Siblings},
@@ -1380,9 +1389,16 @@ func (c *Controller) personalStateAPI(d mountDeps) (*personalstateapi.API, error
 	// store's service recipients are the only wraps a restricted caller is
 	// shown: its own. Members resolves the users a shared-space membership
 	// change names and the device keys they hold (ADR-0108).
+	// MemberWrites lets a member's read-floor device push changes to the
+	// spaces it holds the current key of (ADR-0128).
+	memberWrites, err := personalstateapi.NewMemberWriteAuthority(psStore, d.identities)
+	if err != nil {
+		return nil, fmt.Errorf("controller: %w", err)
+	}
 	psAPI, err := personalstateapi.New(personalstateapi.Options{
 		Store: psStore, Replicator: replicator, Authorizer: d.identities,
-		Principals: d.tokens, Recipients: psStore, Members: d.identities, Logger: c.log,
+		Principals: d.tokens, Recipients: psStore, Members: d.identities,
+		MemberWrites: memberWrites, Logger: c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)

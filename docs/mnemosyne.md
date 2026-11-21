@@ -289,6 +289,23 @@ heyarr app and the Mnemosyne app is two Voidbind devices, each paired, admitted
 and enrolled (`POST /enrol`) on its own, because the two app sandboxes cannot
 share a private key (ADR-0107 amendment, #765).
 
+### What an enrolled app may write
+
+An enrolled device authenticates at the read floor (ADR-0067). It writes
+without a bearer token wherever it is a writing member (ADR-0128): on a space
+whose current key it holds and whose membership admits its user, it may push
+changes (with `?key_epoch=N`), and while it is such a member of any space it
+may upload vault blobs, confirm its own user's upload pins and record
+placement pins. `GET /spaces/{id}/own-devices` reports `member_write` for the
+calling device; a node that predates ADR-0128 omits it, and there an app still
+needs a write token (`mnemosyne token create <name> --scopes write`). Creating a
+space, snapshots, rotation, compaction, membership and unpinning keep the
+scopes they had.
+
+A Device presentation is valid for the window its proof names, at most ten
+minutes. A 401 after an app idles past it means present a fresh proof, not
+enrol again.
+
 ## Moving a vault from heyarr to Mnemosyne
 
 A vault that heyarr held before #754 does not move by copying a database. Its
