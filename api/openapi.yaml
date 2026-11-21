@@ -10393,7 +10393,8 @@ components:
             client decodes the source codec, and the plan's `decision` is then
             `transcode` with `resolution_too_high` among its `reasons` (#892).
             Beside a `device_id`, the lower of this and the device's stored
-            height is the one the decision holds the picture to. When choosing
+            height is the one both the decision and the stream hold the
+            picture to, and an absent `max_height` takes the device's (#931). When choosing
             among a work's copies, a copy taller than this does not fit.
       example:
         containers: [mp4, mkv, webm]
