@@ -55,7 +55,8 @@ type ClientCaps struct {
 	Video      []string `json:"video"`
 	Audio      []string `json:"audio"`
 	// MaxHeight is the tallest picture the client will take. Zero means no
-	// limit.
+	// limit of its own: with a device_id, the device's height applies, and a
+	// stated height is held to the device's (#931).
 	MaxHeight int `json:"max_height"`
 	// AudioLanguages overrides the node preference. An explicit empty list keeps original main audio.
 	AudioLanguages []string `json:"audio_languages,omitempty"`
@@ -81,6 +82,17 @@ func (c ClientCaps) profile() playback.ClientProfile {
 		p.SupportsHDR = *c.SupportsHDR
 	}
 	return p
+}
+
+// tighterHeight is the smaller of two height limits, where zero is no limit.
+func tighterHeight(a, b int64) int64 {
+	switch {
+	case a <= 0:
+		return b
+	case b <= 0 || a < b:
+		return a
+	}
+	return b
 }
 
 // SourceInfo is what the probe found, rendered for a client deciding whether
@@ -219,12 +231,16 @@ func (a *API) planForClient(
 		if body.Client.SupportsHDR == nil {
 			client.SupportsHDR = device.SupportsHDR
 		}
-		// The leg scales to the client's height, so the decision is held to
-		// it too: a registered device that takes 2160 lines and a request
-		// capped at 720 is a re-encode, and the plan says so (#892). Only
-		// the height, because only the height is what the leg honours.
-		if client.MaxHeight > 0 && (device.MaxHeight <= 0 || int64(client.MaxHeight) < device.MaxHeight) {
-			device.MaxHeight = int64(client.MaxHeight)
+		// The plan and the leg read one height: the tighter of the client's
+		// and the registered device's, whichever states one. A request capped
+		// under the device is a re-encode and the plan says so (#892); a
+		// request that leaves max_height unset takes the device's, field by
+		// field (ADR-0123), so a plan that says the picture is scaled is a leg
+		// that scales it (#931). Only the height, because only the height is
+		// what the leg honours. The device is already bounded by the
+		// preference, so this only ever tightens.
+		if h := tighterHeight(int64(client.MaxHeight), device.MaxHeight); h > 0 {
+			client.MaxHeight, device.MaxHeight = int(h), h
 		}
 	}
 	route, err := a.routeBlob(ctx, blobHash)

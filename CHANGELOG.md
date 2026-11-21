@@ -388,6 +388,14 @@ stable.
   alternative.
 
 ### Fixed
+- **A plan for a registered device no longer says `transcode` while handing
+  the bytes over direct** (#931, ADR-0123). With a `device_id` and a `client`
+  that leaves `max_height` unset, the decision held the picture to the
+  device's stored height but the stream had no cap. The stream now takes the
+  device's height too, and a stated `max_height` above the device's is held
+  to the device's for the stream as it already was for the decision. A
+  2160-line copy for a 1080-line television is now streamed at 1080 lines, as
+  the plan already said.
 - **`heyarr gc --apply` no longer dies partway beside a running server**
   (#910). Host commands that open the controller database directly now wait,
   for up to a minute, when the server holds its write lock past the 5-second
