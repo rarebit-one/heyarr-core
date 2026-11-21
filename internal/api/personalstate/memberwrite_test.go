@@ -67,8 +67,10 @@ func TestAMembersDeviceWritesOnlyTheSpacesItIsAMemberOf(t *testing.T) {
 	revokedAt := time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)
 	members := household()
 	members.extra = map[string][]deviceauth.Device{"p-bob": {
-		{ID: "d-old", Name: "old phone", DeviceKey: "ed25519:" + revokedEnc[7:15], EncryptionKey: revokedEnc,
-			EnrolledAt: revokedAt.AddDate(0, -6, 0), RevokedAt: &revokedAt},
+		{
+			ID: "d-old", Name: "old phone", DeviceKey: "ed25519:" + revokedEnc[7:15], EncryptionKey: revokedEnc,
+			EnrolledAt: revokedAt.AddDate(0, -6, 0), RevokedAt: &revokedAt,
+		},
 	}}
 	api := membersAPI(t, members)
 	owner, eve := readDevice("p-owner", ownerKey), readDevice("p-eve", eveKey)
@@ -115,11 +117,15 @@ func TestAMembersDeviceWritesOnlyTheSpacesItIsAMemberOf(t *testing.T) {
 
 	// The write scope is unchanged: unconditional pushes still land, a read
 	// bearer and a guest are refused as before.
-	writer := auth.Identity{Principal: auth.Principal{ID: "p-owner", Kind: auth.KindUser},
-		Token: auth.Token{Scopes: []auth.Scope{auth.ScopeRead, auth.ScopeWrite}}}
+	writer := auth.Identity{
+		Principal: auth.Principal{ID: "p-owner", Kind: auth.KindUser},
+		Token:     auth.Token{Scopes: []auth.Scope{auth.ScopeRead, auth.ScopeWrite}},
+	}
 	wantCode(t, push(writer, memberWriteShared, ""), http.StatusCreated, "")
-	reader := auth.Identity{Principal: auth.Principal{ID: "p-owner", Kind: auth.KindUser},
-		Token: auth.Token{Scopes: []auth.Scope{auth.ScopeRead}}}
+	reader := auth.Identity{
+		Principal: auth.Principal{ID: "p-owner", Kind: auth.KindUser},
+		Token:     auth.Token{Scopes: []auth.Scope{auth.ScopeRead}},
+	}
 	if rec := push(reader, memberWriteShared, "?key_epoch=0"); rec.Code != http.StatusForbidden ||
 		bytes.Contains(rec.Body.Bytes(), []byte(httpapi.CodeSpaceNotMember)) {
 		t.Fatalf("read bearer: %d %s, want the plain write-scope refusal", rec.Code, rec.Body)

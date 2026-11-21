@@ -55,26 +55,9 @@ func (s *Store) MemberHoldsAnyCurrentKey(ctx context.Context, principalID, recip
 		return false, fmt.Errorf("personalstate/store: beginning read transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	// The spaces where recipient holds a copy at the space's current epoch.
-	rows, err := tx.QueryContext(ctx, `
-		SELECT DISTINCT w.space_id FROM wrapped_keys w
-		WHERE w.recipient = ?
-		  AND w.epoch = (SELECT COALESCE(MAX(h.epoch), 0) FROM space_key_history h WHERE h.space_id = w.space_id)
-		ORDER BY w.space_id`, recipient)
+	held, err := currentWrapSpacesTx(ctx, tx, recipient)
 	if err != nil {
-		return false, fmt.Errorf("personalstate/store: listing a recipient's current wraps: %w", err)
-	}
-	var held []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return false, fmt.Errorf("personalstate/store: reading a recipient's current wraps: %w", err)
-		}
-		held = append(held, id)
-	}
-	if err := rows.Close(); err != nil {
-		return false, fmt.Errorf("personalstate/store: listing a recipient's current wraps: %w", err)
+		return false, err
 	}
 	for _, spaceID := range held {
 		ok, err := memberAdmitsTx(ctx, tx, spaceID, principalID)
@@ -86,6 +69,29 @@ func (s *Store) MemberHoldsAnyCurrentKey(ctx context.Context, principalID, recip
 		}
 	}
 	return false, tx.Commit()
+}
+
+// currentWrapSpacesTx is the spaces where recipient holds a copy at the
+// space's current epoch.
+func currentWrapSpacesTx(ctx context.Context, tx *sql.Tx, recipient string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT w.space_id FROM wrapped_keys w
+		WHERE w.recipient = ?
+		  AND w.epoch = (SELECT COALESCE(MAX(h.epoch), 0) FROM space_key_history h WHERE h.space_id = w.space_id)
+		ORDER BY w.space_id`, recipient)
+	if err != nil {
+		return nil, fmt.Errorf("personalstate/store: listing a recipient's current wraps: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var held []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("personalstate/store: reading a recipient's current wraps: %w", err)
+		}
+		held = append(held, id)
+	}
+	return held, rows.Err()
 }
 
 func memberHoldsCurrentKeyTx(ctx context.Context, tx *sql.Tx, spaceID, principalID, recipient string) (bool, error) {

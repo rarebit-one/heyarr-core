@@ -402,16 +402,20 @@ func (f memberWritesFunc) MemberMayWrite(_ context.Context, principalID, deviceK
 // answer becomes, and that a lookup error never lets a request through.
 func TestRequireWriteOrMember(t *testing.T) {
 	t.Parallel()
-	readDev := auth.Identity{DeviceKey: "ed25519:dev", Principal: auth.Principal{ID: "p-1", Kind: auth.KindUser},
-		Token: auth.Token{Scopes: []auth.Scope{auth.ScopeRead}}}
+	readDev := auth.Identity{
+		DeviceKey: "ed25519:dev", Principal: auth.Principal{ID: "p-1", Kind: auth.KindUser},
+		Token: auth.Token{Scopes: []auth.Scope{auth.ScopeRead}},
+	}
 	yes := memberWritesFunc(func(p, d, s string) (bool, error) { return p == "p-1" && d == "ed25519:dev" && s == "sp-1", nil })
 	no := memberWritesFunc(func(string, string, string) (bool, error) { return false, nil })
 	broken := memberWritesFunc(func(string, string, string) (bool, error) { return false, errors.New("disk on fire") })
 	restricted := readDev
 	restricted.Restricted = true
 	guestID := auth.Identity{Guest: true, Token: auth.Token{Scopes: []auth.Scope{auth.ScopeRead}}}
-	bearerRead := auth.Identity{Principal: auth.Principal{ID: "p-1", Kind: auth.KindUser},
-		Token: auth.Token{Scopes: []auth.Scope{auth.ScopeRead}}}
+	bearerRead := auth.Identity{
+		Principal: auth.Principal{ID: "p-1", Kind: auth.KindUser},
+		Token:     auth.Token{Scopes: []auth.Scope{auth.ScopeRead}},
+	}
 	bearerWrite := bearerRead
 	bearerWrite.Token.Scopes = []auth.Scope{auth.ScopeRead, auth.ScopeWrite}
 
