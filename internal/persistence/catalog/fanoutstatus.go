@@ -202,6 +202,11 @@ type FanOutEntry struct {
 type FanOutQuery struct {
 	Outcome FanOutOutcome
 	Site    string
+	// Signer narrows to the ops one key signed, as an op's `by` carries it: a
+	// sibling asking over the peer surface sees only its own ops (#924).
+	Signer string
+	// OpHash narrows to one acquire op.
+	OpHash string
 	// Limit bounds the result; zero or less means no bound.
 	Limit int
 }
@@ -218,6 +223,14 @@ func (c *Catalog) ListFanOut(ctx context.Context, q FanOutQuery) ([]FanOutEntry,
 	if q.Outcome != "" {
 		where += " AND o.outcome = ?"
 		args = append(args, string(q.Outcome))
+	}
+	if q.Signer != "" {
+		where += " AND c.signer = ?"
+		args = append(args, q.Signer)
+	}
+	if q.OpHash != "" {
+		where += " AND o.op_hash = ?"
+		args = append(args, q.OpHash)
 	}
 	//nolint:gosec // assembled only from the literal fragments above; every value is bound
 	rows, err := c.db.Reader().QueryContext(ctx, `
@@ -291,7 +304,9 @@ func (c *Catalog) selfSigner(ctx context.Context) (string, error) {
 //
 // What a sibling did with the op is recorded only at that sibling
 // (catalog_op_applications is per node); the one answer that travels back on
-// the op-log is an `unsourced` report, so that is all the origin can show.
+// the op-log is an `unsourced` report, so that is all this read shows. The
+// rest is asked of each sibling over the peer surface (ADR-0119 #924
+// amendment).
 type Published struct {
 	OpHash       string
 	Infohash     string

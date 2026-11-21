@@ -43,11 +43,12 @@ type AcquisitionStatusView struct {
 }
 
 // AcquisitionPublished is the acquire op this site signed for a want, and what
-// came back from its siblings on the op-log.
+// came back from its siblings.
 //
-// What a sibling did with the op is recorded only at that sibling; read it
-// there (get_acquisition_status, list_fan_out). The one answer that travels
-// back is an `unsourced` report, which is what UnsourcedBy shows.
+// What a sibling did with the op is recorded only at that sibling. The one
+// answer that travels back on the op-log is an `unsourced` report, which is
+// what UnsourcedBy shows; Siblings is the rest, asked of each sibling over the
+// peer surface when the status is read (ADR-0119 #924 amendment).
 type AcquisitionPublished struct {
 	OpHash      string `json:"op_hash"`
 	Infohash    string `json:"infohash"`
@@ -62,6 +63,53 @@ type AcquisitionPublished struct {
 	// Holds are the hold ops this site published for the want's work: bytes
 	// it holds for a sibling to pull over the peer surface.
 	Holds []AcquisitionPublishedHold `json:"holds,omitempty"`
+	// Siblings is each current sibling's outcome for the op, asked over the
+	// peer surface. A sibling that could not be asked is listed with outcome
+	// `unknown` and reachable false. Absent on a node with no peer surface.
+	Siblings []AcquisitionSiblingOutcome `json:"siblings,omitempty"`
+}
+
+// AcquisitionSiblingOutcome is what one sibling did with this site's acquire
+// op, as it answered when asked.
+type AcquisitionSiblingOutcome struct {
+	// Peer is this site's name for the sibling.
+	Peer   string `json:"peer"`
+	PeerID string `json:"peer_id"`
+	// Site is the site the sibling says it is, absent when it did not answer.
+	Site string `json:"site,omitempty"`
+	// Reachable is whether the sibling answered at all.
+	Reachable bool `json:"reachable"`
+	// Outcome is applied, held, deferred, tombstoned, scope_unresolved or
+	// no_site_source as the sibling recorded it; pending when it answered but
+	// has not evaluated the op yet; unknown when it could not be asked.
+	Outcome   string `json:"outcome"`
+	Detail    string `json:"detail,omitempty"`
+	AppliedAt string `json:"applied_at,omitempty"`
+	// State is the §64 state of the sibling's want for it ("DOWNLOADING",
+	// "AVAILABLE", ...), absent when the op reached no want there.
+	State             string `json:"state,omitempty"`
+	ReportedUnsourced bool   `json:"reported_unsourced"`
+	// AskedAt is when the sibling was asked. Answers are cached briefly, so
+	// it can be a little older than the read.
+	AskedAt string `json:"asked_at"`
+}
+
+// SiblingFanOut asks each current sibling what it did with one acquire op this
+// site published (ADR-0119 #924 amendment). An unreachable sibling is an
+// outcome, not an error; the error is for failing to list the siblings, and
+// the status read logs it and goes on without them. It must return within a
+// short bound: it runs inside a status read.
+type SiblingFanOut interface {
+	Outcomes(ctx context.Context, opHash string) ([]SiblingOutcome, error)
+}
+
+// SiblingOutcome is one sibling's answer, as SiblingFanOut returns it.
+type SiblingOutcome struct {
+	PeerID, Name, Site                string
+	Reachable                         bool
+	Outcome, Detail, AppliedAt, State string
+	ReportedUnsourced                 bool
+	AskedAt                           time.Time
 }
 
 // AcquisitionUnsourced is one sibling's unsourced report.
@@ -269,6 +317,21 @@ func (a *API) AcquisitionStatus(ctx context.Context, id string) (AcquisitionStat
 			out.Published.Holds = append(out.Published.Holds, AcquisitionPublishedHold{
 				OpHash: h.OpHash, BlobHash: h.Blob, Scope: h.Scope, HeldAt: h.HeldAt.UTC().Format(time.RFC3339),
 			})
+		}
+		if a.siblingFanOut != nil {
+			// Decoration, not the status: failing to list the siblings
+			// leaves the block without them rather than failing the read.
+			sibs, err := a.siblingFanOut.Outcomes(ctx, pub.OpHash)
+			if err != nil {
+				a.log.Warn("reading the siblings' fan-out outcomes failed", "desired_item_id", id, "error", err)
+			}
+			for _, s := range sibs {
+				out.Published.Siblings = append(out.Published.Siblings, AcquisitionSiblingOutcome{
+					Peer: s.Name, PeerID: s.PeerID, Site: s.Site, Reachable: s.Reachable,
+					Outcome: s.Outcome, Detail: s.Detail, AppliedAt: s.AppliedAt, State: s.State,
+					ReportedUnsourced: s.ReportedUnsourced, AskedAt: s.AskedAt.UTC().Format(time.RFC3339),
+				})
+			}
 		}
 	}
 	return out, nil

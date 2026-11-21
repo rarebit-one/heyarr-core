@@ -5,12 +5,15 @@
 package resources_test
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/rarebit-one/heyarr-core/internal/api/resources"
 	"github.com/rarebit-one/heyarr-core/internal/catalogop"
 )
 
@@ -228,6 +231,139 @@ func TestListFanOutOverHTTP(t *testing.T) {
 func TestAcquisitionStatusAtTheOriginOverHTTP(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t).seed()
+	acq, report := seedPublished(t, h)
+	stamp := time.Date(2026, 8, 2, 9, 0, 0, 0, time.UTC).Format(time.RFC3339)
+
+	type status struct {
+		Published *struct {
+			OpHash      string `json:"op_hash"`
+			Infohash    string `json:"infohash"`
+			Private     bool   `json:"private"`
+			SelectedAt  string `json:"selected_at"`
+			UnsourcedBy []struct {
+				Site   string `json:"site"`
+				OpHash string `json:"op_hash"`
+			} `json:"unsourced_by"`
+			Siblings []json.RawMessage `json:"siblings"`
+		} `json:"published"`
+	}
+	read := func(id string) status {
+		t.Helper()
+		resp := h.get("/api/v1/desired/" + id + "/acquisition")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d: %s", resp.StatusCode, h.body(resp))
+		}
+		var got status
+		if err := json.Unmarshal(h.body(resp), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	got := read(desired1ID)
+	if got.Published == nil {
+		t.Fatal("a want this site published has no published block")
+	}
+	if p := got.Published; p.OpHash != acq.Hash || p.Infohash != acq.Acquire.Infohash || !p.Private ||
+		p.SelectedAt != stamp || len(p.UnsourcedBy) != 1 || p.UnsourcedBy[0].Site != "site-b" ||
+		p.UnsourcedBy[0].OpHash != report.Hash {
+		t.Errorf("published = %+v", *p)
+	}
+	if got.Published.Siblings != nil {
+		t.Errorf("siblings = %s, want none on a node with no peer surface", got.Published.Siblings)
+	}
+	// desired2 wants the same work under another profile, at the same scope
+	// and aspect: the op is keyed on those, not the profile, so it is the
+	// same publication.
+	if got := read(desired2ID); got.Published == nil || got.Published.OpHash != acq.Hash {
+		t.Errorf("desired2: published = %+v, want the same op (same work, scope and aspect)", got.Published)
+	}
+}
+
+// fakeSiblingFanOut answers with fixed outcomes, recording the op asked about.
+type fakeSiblingFanOut struct {
+	outcomes []resources.SiblingOutcome
+	err      error
+	asked    []string
+}
+
+func (f *fakeSiblingFanOut) Outcomes(_ context.Context, op string) ([]resources.SiblingOutcome, error) {
+	f.asked = append(f.asked, op)
+	return f.outcomes, f.err
+}
+
+// TestAcquisitionStatusShowsEachSiblingsOutcome (#924): the origin asks its
+// siblings about the op it published, and status lists each one — the one
+// that answered with its outcome, and the one that could not be asked as
+// unknown and unreachable. Failing to list the siblings at all leaves them
+// out rather than failing the read.
+func TestAcquisitionStatusShowsEachSiblingsOutcome(t *testing.T) {
+	t.Parallel()
+	asked := time.Date(2026, 8, 2, 9, 30, 0, 0, time.UTC)
+	fake := &fakeSiblingFanOut{outcomes: []resources.SiblingOutcome{
+		{PeerID: "peer-b-id", Name: "peer-b", Site: "site-b", Reachable: true, Outcome: "applied",
+			Detail: "from site site-a", AppliedAt: "2026-08-02T09:05:00Z", State: "DOWNLOADING", AskedAt: asked},
+		{PeerID: "peer-c-id", Name: "peer-c", Outcome: "unknown", Detail: "unreachable: connection refused", AskedAt: asked},
+	}}
+	h := newHarness(t, withSiblingFanOut(fake)).seed()
+	acq, _ := seedPublished(t, h)
+
+	type sibling struct {
+		Peer      string `json:"peer"`
+		PeerID    string `json:"peer_id"`
+		Site      string `json:"site"`
+		Reachable *bool  `json:"reachable"`
+		Outcome   string `json:"outcome"`
+		Detail    string `json:"detail"`
+		AppliedAt string `json:"applied_at"`
+		State     string `json:"state"`
+		AskedAt   string `json:"asked_at"`
+	}
+	read := func() []sibling {
+		t.Helper()
+		resp := h.get("/api/v1/desired/" + desired1ID + "/acquisition")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d: %s", resp.StatusCode, h.body(resp))
+		}
+		var got struct {
+			Published *struct {
+				Siblings []sibling `json:"siblings"`
+			} `json:"published"`
+		}
+		if err := json.Unmarshal(h.body(resp), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Published == nil {
+			t.Fatal("no published block")
+		}
+		return got.Published.Siblings
+	}
+	sibs := read()
+	if len(fake.asked) != 1 || fake.asked[0] != acq.Hash {
+		t.Errorf("asked the siblings about %v, want the published op %s", fake.asked, acq.Hash)
+	}
+	if len(sibs) != 2 {
+		t.Fatalf("siblings = %+v, want both", sibs)
+	}
+	if s := sibs[0]; s.Peer != "peer-b" || s.PeerID != "peer-b-id" || s.Site != "site-b" ||
+		s.Reachable == nil || !*s.Reachable || s.Outcome != "applied" || s.State != "DOWNLOADING" ||
+		s.AppliedAt != "2026-08-02T09:05:00Z" || s.AskedAt != "2026-08-02T09:30:00Z" {
+		t.Errorf("the reachable sibling = %+v", s)
+	}
+	if s := sibs[1]; s.Peer != "peer-c" || s.Reachable == nil || *s.Reachable || s.Outcome != "unknown" ||
+		s.Site != "" || s.Detail == "" {
+		t.Errorf("the unreachable sibling = %+v, want unknown and reachable false", s)
+	}
+
+	fake.outcomes, fake.err = nil, errors.New("listing peers: database is locked")
+	if sibs := read(); sibs != nil {
+		t.Errorf("siblings = %+v, want none when they cannot be listed", sibs)
+	}
+}
+
+// seedPublished makes this site the origin of an acquire op for desired1ID's
+// work, which sibling site-b reported unsourced.
+func seedPublished(t *testing.T, h *harness) (acq, report catalogop.Op) {
+	t.Helper()
 	selfPub, selfPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -259,48 +395,9 @@ func TestAcquisitionStatusAtTheOriginOverHTTP(t *testing.T) {
 		Infohash: "0123456789abcdef0123456789abcdef01234567", Title: "Arrival 2016 2160p", Private: true,
 		WorkTitle: "Arrival", Year: 2016, SelectedAt: at, Site: "site-a",
 	}, nil, at)
-	acq := log(tok, err, "acquire", "[]")
+	acq = log(tok, err, "acquire", "[]")
 	tok, err = catalogop.SignUnsourced(sibPriv, "movie", "arrival|2016",
 		catalogop.Unsourced{Acquire: acq.Hash, Site: "site-b"}, []string{acq.Hash}, at)
-	report := log(tok, err, "unsourced", `["`+acq.Hash+`"]`)
-
-	type status struct {
-		Published *struct {
-			OpHash      string `json:"op_hash"`
-			Infohash    string `json:"infohash"`
-			Private     bool   `json:"private"`
-			SelectedAt  string `json:"selected_at"`
-			UnsourcedBy []struct {
-				Site   string `json:"site"`
-				OpHash string `json:"op_hash"`
-			} `json:"unsourced_by"`
-		} `json:"published"`
-	}
-	read := func(id string) status {
-		t.Helper()
-		resp := h.get("/api/v1/desired/" + id + "/acquisition")
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("status = %d: %s", resp.StatusCode, h.body(resp))
-		}
-		var got status
-		if err := json.Unmarshal(h.body(resp), &got); err != nil {
-			t.Fatal(err)
-		}
-		return got
-	}
-	got := read(desired1ID)
-	if got.Published == nil {
-		t.Fatal("a want this site published has no published block")
-	}
-	if p := got.Published; p.OpHash != acq.Hash || p.Infohash != acq.Acquire.Infohash || !p.Private ||
-		p.SelectedAt != stamp || len(p.UnsourcedBy) != 1 || p.UnsourcedBy[0].Site != "site-b" ||
-		p.UnsourcedBy[0].OpHash != report.Hash {
-		t.Errorf("published = %+v", *p)
-	}
-	// desired2 wants the same work under another profile, at the same scope
-	// and aspect: the op is keyed on those, not the profile, so it is the
-	// same publication.
-	if got := read(desired2ID); got.Published == nil || got.Published.OpHash != acq.Hash {
-		t.Errorf("desired2: published = %+v, want the same op (same work, scope and aspect)", got.Published)
-	}
+	report = log(tok, err, "unsourced", `["`+acq.Hash+`"]`)
+	return acq, report
 }

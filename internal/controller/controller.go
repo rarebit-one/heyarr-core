@@ -1096,13 +1096,20 @@ func (c *Controller) resourceAPI(ctx context.Context, d mountDeps, queue *jobs.Q
 	// The on-demand force-sync behind POST /api/v1/catalog/sync. It needs the
 	// peer surface's certificate to dial a sibling, so it is wired only when this
 	// node has one; without it the route answers 503 (a single-site node).
-	var catalogSync resources.CatalogSyncTrigger
+	var (
+		catalogSync resources.CatalogSyncTrigger
+		// The siblings' outcomes for this site's acquire ops, asked over the
+		// peer surface when acquisition status is read (ADR-0119 #924
+		// amendment). Wired with the same certificate, for the same reason.
+		fanOutPeek resources.SiblingFanOut
+	)
 	if d.material != nil {
 		catalogSync = catalogsync.NewSyncer(
 			catalogTomb,
 			catalogsync.NewClient(d.material, c.log),
 			catalogSiblings{members: d.members, self: d.selfPeerID},
 			c.log)
+		fanOutPeek = newSiblingFanOut(d.material, d.members, c.log)
 	}
 
 	// ADR-0111: the site map. Validate already parsed it at startup, so an
@@ -1128,6 +1135,7 @@ func (c *Controller) resourceAPI(ctx context.Context, d mountDeps, queue *jobs.Q
 		CatalogTombstones: catalogTomb,
 		CatalogSigner:     catalogSigner,
 		CatalogSync:       catalogSync,
+		SiblingFanOut:     fanOutPeek,
 
 		RenderSecret:        secret,
 		RenderBaseURL:       rendererBaseURL(c.cfg),

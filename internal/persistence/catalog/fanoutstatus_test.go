@@ -170,6 +170,12 @@ func TestListFanOutShowsOutcomesWithNoWant(t *testing.T) {
 		{"by site and outcome", catalog.FanOutQuery{Site: "north", Outcome: catalog.FanOutApplied}, 1},
 		{"an unknown site", catalog.FanOutQuery{Site: "west"}, 0},
 		{"limited", catalog.FanOutQuery{Limit: 2}, 2},
+		// #924: a sibling asking over the peer surface sees only its own ops.
+		{"by signer", catalog.FanOutQuery{Signer: unresolved.By}, 1},
+		{"a signer of none", catalog.FanOutQuery{Signer: "ed25519:none"}, 0},
+		{"own signer is still not fan-out", catalog.FanOutQuery{Signer: own.By}, 0},
+		{"by op", catalog.FanOutQuery{OpHash: applied.Hash}, 1},
+		{"by op and another signer", catalog.FanOutQuery{OpHash: applied.Hash, Signer: unresolved.By}, 0},
 	} {
 		got, err := h.cat.ListFanOut(ctx, tc.q)
 		if err != nil {

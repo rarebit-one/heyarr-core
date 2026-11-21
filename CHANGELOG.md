@@ -10,6 +10,17 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **The origin sees what each sibling did with its choice** (#924, ADR-0119
+  #924 amendment). Acquisition status's `published` block now carries
+  `siblings`: each sibling's own outcome for the acquire op (`applied`,
+  `held`, `deferred`, ...; `pending` before it has evaluated it), with the
+  state of its want, asked over a new peer route,
+  `GET /peer/v1/fan-out`, when the status is read. A sibling that cannot be
+  reached within two seconds is listed as `unknown` with `reachable: false`;
+  answers are cached for thirty seconds, so a down sibling never slows every
+  read. Nothing is added to the op-log. The route answers only for the ops
+  the asking certificate's key signed; an older sibling without it shows as
+  `unknown`.
 - **The origin sees what came back from its siblings** (#799, ADR-0119).
   Acquisition status (MCP `get_acquisition_status`,
   `GET /api/v1/desired/{id}/acquisition`) carries `published` for a want whose
