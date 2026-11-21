@@ -1,6 +1,6 @@
 # 0119. A site publishes the release it chose, and its siblings acquire it themselves
 
-**Status:** Accepted (2026-11-17, the owner's decisions on #833 and #800)
+**Status:** Accepted (2026-11-17, the owner's decisions on #833 and #800; 2026-11-21, #924)
 **Date:** 2026-10-20
 **Amended:** 2026-11-17. An asset a site holds without an infohash (a scan, an
 HTTP, usenet or direct fetch) reaches the sibling by **peer-pull**, for
@@ -12,7 +12,11 @@ swarm: when the sibling reports that it can resolve no source for an `acquire`
 (an `unsourced` op), the origin publishes a `hold` for that asset, in the same
 opted-in libraries and under the same size cap. See *Amendment: a dead swarm's
 release is pulled from the origin, on the sibling's report (2026-11-17, #800)*.
-Passages changed in place are marked *(amended 2026-11-17)*.
+Passages changed in place are marked *(amended 2026-11-17)*. Amended again
+2026-11-21: the origin learns what each sibling did with its `acquire` by
+asking the sibling over the peer surface, for display only, with no new op
+kind. See *Amendment: the origin asks its siblings what they did with its
+choice (2026-11-21, #924)*.
 **Follows:** ADR-0038 (desire is per site), ADR-0042 (a peer does not join a
 swarm to replicate), ADR-0060 (a direct release), ADR-0073 (the catalog
 converges by an op-log), ADR-0076 (heyarr resolves the `.torrent`), ADR-0090
@@ -389,3 +393,66 @@ channel the Partial-Peer pair shares (see *Decision*). So the report is an op:
   would stop reaching it by peer-pull.
 - More than two sites. Only the origin publishes, and any current member's
   report triggers the hold.
+
+## Amendment: the origin asks its siblings what they did with its choice (2026-11-21, #924)
+
+**Status:** Accepted. Accepted by the owner 2026-11-21 (director-relayed).
+
+The #800 amendment's decision 9 made a sibling's outcome visible where the
+sibling's want is. At the origin, acquisition status shows the `acquire` it
+published and the `unsourced` reports that came back, and nothing else: whether
+a sibling applied the op, deferred it or could not resolve its scope is recorded
+only in that sibling's `catalog_op_applications`. #924 asked how the origin
+should see it.
+
+### The decision
+
+1. **The origin asks over the peer surface.** A sibling serves
+   `GET /peer/v1/fan-out?op=<hash>`: its outcome for each `acquire` signed by
+   the key the client certificate proved, with the state of the want the op
+   reached. The signer is never a parameter, so a member reads its own ops'
+   outcomes and no one else's.
+2. **It is a read for display, and nothing acts on it.** The origin shows the
+   answer in acquisition status (`published.siblings`) and decides nothing from
+   it. A signal that fan-out acts on, such as the report that makes the origin
+   publish a `hold`, stays on the op-log, because it must survive the sibling
+   being unreachable. This is why the #800 amendment's rejection of a polled
+   peer route (decision 5) does not apply: that route would have carried a
+   decision; this one carries a view.
+3. **An unreachable sibling is shown, not guessed.** Each sibling is asked
+   concurrently under a short timeout (two seconds), and every answer,
+   including "unreachable", is cached for thirty seconds. A sibling that could
+   not be asked is listed with outcome `unknown`, and one that answered with no
+   outcome for the op is `pending`. A status read waits at most one timeout per
+   cache period, and never fails because a sibling is down.
+4. **The op-log does not change.** No op kind is added and `unsourced` keeps
+   its shipped shape.
+
+### Alternatives rejected
+
+- **An `applied` (ack) op kind**, one per `(acquire, reporter)`. Every site
+  would carry each ack forever (the op-log is a G-set), at one op per sibling
+  per selection against the catalog-sync limit, to show something only the
+  origin's status reads.
+- **Generalising `unsourced` into an `outcome` report**, superseded per
+  `(acquire, reporter)`. It gives more for the same per-reporter budget, but it
+  changes a shipped op kind that older builds already evaluate, and the
+  supersede rule adds a second way for the op-log to mean something.
+
+### Consequences
+
+- The origin's view is current but partial: a sibling that is down, or one
+  reachable only in the other direction (ADR-0038), shows as `unknown`. Its
+  outcome is still readable at the sibling itself.
+- A sibling on an older build answers 404 and shows as `unknown`, with a
+  detail saying it did not answer the question. Nothing breaks in either
+  direction, so the two sites can upgrade in any order.
+- The route is reversible: it writes nothing, so replacing it with an op later
+  leaves nothing to migrate.
+
+### What would make us revisit
+
+- The origin needing to act on a sibling's outcome, rather than show it. That
+  is an op-log signal (option 1 or 2 above), not this route.
+- One-way reachability between siblings becoming the normal case, so the
+  origin sees `unknown` for most of its siblings most of the time.

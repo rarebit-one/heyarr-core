@@ -118,8 +118,10 @@ func (s *Server) registerAcquisitionTools() {
 			"origin, and the peer-pull outcome of any hold the origin published for the work. " +
 			"A want whose release this site published to its siblings carries `published`: the " +
 			"acquire op, the sibling sites that reported they could not source it, and the holds " +
-			"this site published so they can pull the bytes. What a sibling otherwise did with it " +
-			"is recorded at that sibling, not here.",
+			"this site published so they can pull the bytes, and `siblings`: each sibling's own " +
+			"outcome for it (applied, held, deferred, ...; pending when it has not evaluated it " +
+			"yet), asked over the peer surface and cached briefly, or unknown with reachable " +
+			"false when the sibling could not be asked.",
 		InputSchema: schemaDesiredItemID,
 		Handler:     s.getAcquisitionStatus,
 	})

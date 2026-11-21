@@ -6835,6 +6835,66 @@ paths:
         "503":
           description: This node does not converge a catalog with a sibling.
 
+  /peer/v1/fan-out:
+    get:
+      tags: [peer]
+      operationId: getPeerFanOut
+      summary: What this node did with the acquire ops the caller signed (ADR-0119 #924).
+      description: |
+        Answers an origin asking what this sibling did with the acquire ops
+        it published (ADR-0119): each op's outcome here (`applied`, `held`,
+        `deferred`, `tombstoned`, `scope_unresolved`, `no_site_source`), and
+        the §64 state of the want it reached. The origin shows it in
+        acquisition status (`published.siblings`).
+
+        **Only the caller's own ops.** The signer is the key the client
+        certificate proved, never a parameter, so a member sees its own ops'
+        outcomes and nobody else's. It is a read, and nothing acts on it: a
+        signal fan-out decides on rides the op-log (`unsourced`), because it
+        must survive the sibling being unreachable.
+      security:
+        - peerCertificate: []
+      parameters:
+        - name: op
+          in: query
+          required: false
+          description: Narrow the answer to one acquire op, by hash. Without it, the newest 500.
+          schema: { type: string, maxLength: 128 }
+      responses:
+        "200":
+          description: This node's outcomes for the caller's acquire ops, most recently applied first (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [site, applications]
+                properties:
+                  site:
+                    type: string
+                    description: This node's configured site.
+                  applications:
+                    type: array
+                    items:
+                      type: object
+                      required: [op_hash, outcome, applied_at, reported_unsourced]
+                      properties:
+                        op_hash: { type: string }
+                        outcome:
+                          type: string
+                          enum: [applied, held, deferred, tombstoned, scope_unresolved, no_site_source]
+                        detail: { type: string }
+                        applied_at: { type: string, format: date-time }
+                        state:
+                          type: string
+                          description: The §64 state of the want the op reached here; absent when it reached none.
+                        reported_unsourced:
+                          type: boolean
+                          description: Whether this node signed an `unsourced` op for it.
+        "400":
+          description: The `op` parameter is not an op hash.
+        "503":
+          description: This node evaluates no siblings' acquire ops.
+
   /peer/v1/state/{space}/heads:
     parameters:
       - name: space
@@ -11303,10 +11363,11 @@ components:
 
         The op is keyed on (work, scope, aspect), not on the profile, so two
         wants for the same work at the same scope under different profiles show
-        the same publication. What a sibling otherwise did with the op is
-        recorded only at that sibling (its `fan_out` block, `GET /fan-out`);
-        the one answer that travels back on the op-log is an `unsourced`
-        report.
+        the same publication. What a sibling did with the op is recorded only
+        at that sibling (its `fan_out` block, `GET /fan-out`). The one answer
+        that travels back on the op-log is an `unsourced` report
+        (`unsourced_by`); the rest is asked of each sibling over the peer
+        surface when the status is read (`siblings`, ADR-0119 #924 amendment).
       required: [op_hash, infohash, release_name, scope, aspect, private, selected_at]
       properties:
         op_hash: { type: string }
@@ -11341,6 +11402,49 @@ components:
               blob_hash: { type: string }
               scope: { type: string }
               held_at: { type: string, format: date-time }
+        siblings:
+          type: array
+          description: |
+            Each current sibling's outcome for the op, asked over the peer
+            surface (`GET /peer/v1/fan-out`) when the status is read, under a
+            short timeout and cached for about thirty seconds. A sibling that
+            could not be asked is listed with `reachable: false` and outcome
+            `unknown`; nothing about it is inferred. Absent on a node with no
+            peer surface.
+          items:
+            type: object
+            required: [peer, peer_id, reachable, outcome, reported_unsourced, asked_at]
+            properties:
+              peer:
+                type: string
+                description: This site's name for the sibling.
+              peer_id: { type: string }
+              site:
+                type: string
+                description: The site the sibling says it is; absent when it did not answer.
+              reachable:
+                type: boolean
+                description: Whether the sibling answered at all.
+              outcome:
+                type: string
+                enum: [applied, held, deferred, tombstoned, scope_unresolved, no_site_source, pending, unknown]
+                description: |
+                  What the sibling did with the op. `pending`: it answered but
+                  has not evaluated the op yet (catalog sync has not carried
+                  it there). `unknown`: it could not be asked, or did not
+                  answer the question (an older build).
+              detail: { type: string }
+              applied_at: { type: string, format: date-time }
+              state:
+                type: string
+                description: The §64 state of the sibling's want for the release ("DOWNLOADING", "AVAILABLE", ...), absent when the op reached no want there.
+              reported_unsourced:
+                type: boolean
+                description: Whether the sibling signed an `unsourced` op for it.
+              asked_at:
+                type: string
+                format: date-time
+                description: When the sibling was asked; an answer can be cached briefly.
 
     AcquisitionTransfer:
       type: object

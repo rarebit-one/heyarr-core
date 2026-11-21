@@ -391,7 +391,10 @@ func (c *Controller) newPeerSurface(
 		// re-verified, so a sibling push writes no state it could not sign for.
 		CatalogOps: catalogTomb,
 		Placements: placements,
-		Logger:     c.log,
+		// What this node did with the acquire ops a sibling signed, for the
+		// sibling's acquisition status (ADR-0119 #924 amendment). A read.
+		FanOut: fanOutAnswers{cat: peerCatalog, site: c.cfg.Peer.Site},
+		Logger: c.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: %w", err)

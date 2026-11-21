@@ -112,7 +112,11 @@ type Options struct {
 	// /api/v1/catalog/sync (ADR-0073, #449). Optional: nil leaves the route
 	// answering 503, a single-site node with no sibling to converge with.
 	CatalogSync CatalogSyncTrigger
-	Logger      *slog.Logger
+	// SiblingFanOut asks each sibling what it did with an acquire op this site
+	// published, for acquisition status (ADR-0119 #924 amendment). Optional:
+	// nil leaves `published.siblings` absent, a node with no peer surface.
+	SiblingFanOut SiblingFanOut
+	Logger        *slog.Logger
 	// Now and NewID are injected so that a created resource's timestamp and
 	// identifier are fixed values in a test, which is what lets the response
 	// shapes be golden files rather than a regex (ADR-0017).
@@ -199,9 +203,12 @@ type API struct {
 	// catalogSync runs an on-demand convergence pass (POST /catalog/sync). Nil on
 	// a single-site node.
 	catalogSync CatalogSyncTrigger
-	log         *slog.Logger
-	now         func() time.Time
-	newID       func() string
+	// siblingFanOut reads the siblings' outcomes for this site's acquire ops
+	// (#924). Nil on a node with no peer surface.
+	siblingFanOut SiblingFanOut
+	log           *slog.Logger
+	now           func() time.Time
+	newID         func() string
 
 	renderSecret  []byte
 	renderBaseURL string
@@ -321,6 +328,7 @@ func New(opts Options) (*API, error) {
 		catalogTombstones: opts.CatalogTombstones,
 		catalogSigner:     opts.CatalogSigner,
 		catalogSync:       opts.CatalogSync,
+		siblingFanOut:     opts.SiblingFanOut,
 
 		log:   log.With("component", "api"),
 		now:   now,

@@ -221,6 +221,10 @@ type Options struct {
 	// the route is still mounted and answers 503, like every other optional
 	// capability here.
 	Placements PlacementSource
+	// FanOut answers a sibling asking what this node did with the acquire ops
+	// it signed (ADR-0119 #924 amendment). Nil on a node that evaluates no
+	// siblings' acquire ops — the route is still mounted and answers 503.
+	FanOut FanOutSource
 }
 
 // Server is the peer listener.
@@ -274,6 +278,9 @@ type Server struct {
 	// placements answers a sibling's placement question (ADR-0114). Nil on a
 	// node that offers none.
 	placements PlacementSource
+	// fanOut answers a sibling's fan-out ask (#924). Nil on a node that
+	// evaluates no siblings' acquire ops.
+	fanOut FanOutSource
 
 	http     *http.Server
 	bound    string
@@ -333,6 +340,7 @@ func New(opts Options) (*Server, error) {
 		catalogOps:    opts.CatalogOps,
 		state:         opts.State,
 		placements:    opts.Placements,
+		fanOut:        opts.FanOut,
 	}
 	s.handler = s.routes()
 	s.http = &http.Server{
@@ -474,6 +482,10 @@ func (s *Server) routes() http.Handler {
 		// above. The question travels the same way as the bytes, so a
 		// one-way-reachable pair still converges in the direction it can.
 		r.Post(strings.TrimPrefix(placementsync.Path, Prefix), s.handlePlacements)
+		// What this node did with the acquire ops the CALLER signed (ADR-0119
+		// #924 amendment). A read for the origin's acquisition status, and
+		// nothing acts on it: the signals fan-out decides on ride the op-log.
+		r.Get(strings.TrimPrefix(FanOutPath, Prefix), s.handleFanOut)
 	})
 
 	// There is no admin route on this router and there is not going to be one.

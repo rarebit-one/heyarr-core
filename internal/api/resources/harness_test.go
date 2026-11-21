@@ -119,6 +119,9 @@ type harnessConfig struct {
 	catalogSigner ed25519.PrivateKey
 	// catalogSyncTrigger, when non-nil, backs POST /api/v1/catalog/sync (#449).
 	catalogSyncTrigger resources.CatalogSyncTrigger
+	// siblingFanOut, when non-nil, asks the siblings for their fan-out
+	// outcomes in acquisition status (#924).
+	siblingFanOut resources.SiblingFanOut
 	// sites is the SiteMap passed to the API (ADR-0111). Zero value = single-site.
 	sites config.SiteMap
 	// hls presents stream plans as HLS (ADR-0126). Nil is a node that cannot.
@@ -134,6 +137,12 @@ func withHLS(p resources.HLSPresenter) harnessOption {
 // POST /api/v1/catalog/sync (ADR-0073, #449).
 func withCatalogSyncTrigger(trigger resources.CatalogSyncTrigger) harnessOption {
 	return func(hc *harnessConfig) { hc.catalogSyncTrigger = trigger }
+}
+
+// withSiblingFanOut wires the siblings' fan-out outcomes into acquisition
+// status (#924).
+func withSiblingFanOut(s resources.SiblingFanOut) harnessOption {
+	return func(hc *harnessConfig) { hc.siblingFanOut = s }
 }
 
 // withCatalogConvergence wires the editorial catalog op store and the signing
@@ -275,6 +284,7 @@ func newHarness(t *testing.T, opts ...harnessOption) *harness {
 		CatalogTombstones: catalogTomb,
 		CatalogSigner:     hc.catalogSigner,
 		CatalogSync:       hc.catalogSyncTrigger,
+		SiblingFanOut:     hc.siblingFanOut,
 		Logger:            slog.New(slog.DiscardHandler),
 		Now:               clock.Now,
 		NewID:             ids.next,
