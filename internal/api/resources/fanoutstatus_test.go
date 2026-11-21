@@ -300,8 +300,10 @@ func TestAcquisitionStatusShowsEachSiblingsOutcome(t *testing.T) {
 	t.Parallel()
 	asked := time.Date(2026, 8, 2, 9, 30, 0, 0, time.UTC)
 	fake := &fakeSiblingFanOut{outcomes: []resources.SiblingOutcome{
-		{PeerID: "peer-b-id", Name: "peer-b", Site: "site-b", Reachable: true, Outcome: "applied",
-			Detail: "from site site-a", AppliedAt: "2026-08-02T09:05:00Z", State: "DOWNLOADING", AskedAt: asked},
+		{
+			PeerID: "peer-b-id", Name: "peer-b", Site: "site-b", Reachable: true, Outcome: "applied",
+			Detail: "from site site-a", AppliedAt: "2026-08-02T09:05:00Z", State: "DOWNLOADING", AskedAt: asked,
+		},
 		{PeerID: "peer-c-id", Name: "peer-c", Outcome: "unknown", Detail: "unreachable: connection refused", AskedAt: asked},
 	}}
 	h := newHarness(t, withSiblingFanOut(fake)).seed()

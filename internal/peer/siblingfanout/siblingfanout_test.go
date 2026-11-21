@@ -66,8 +66,10 @@ func TestOutcomesPerSibling(t *testing.T) {
 		answers: map[string]peerapi.FanOutAnswer{
 			"applied": {Site: "site-b", Applications: []peerapi.FanOutApplication{
 				{OpHash: "blake3:another", Outcome: "held"},
-				{OpHash: opHash, Outcome: "applied", Detail: "from site site-a",
-					AppliedAt: "2026-11-21T08:00:00Z", State: "downloading"},
+				{
+					OpHash: opHash, Outcome: "applied", Detail: "from site site-a",
+					AppliedAt: "2026-11-21T08:00:00Z", State: "downloading",
+				},
 			}},
 			"pending": {Site: "site-c", Applications: []peerapi.FanOutApplication{}},
 		},
@@ -141,7 +143,10 @@ func TestOutcomesAreCachedForTheTTL(t *testing.T) {
 	if f.count("up") != 1 || f.count("down") != 1 {
 		t.Fatalf("inside the TTL: asked up %d, down %d times, want 1 each", f.count("up"), f.count("down"))
 	}
-	if r.Outcomes(context.Background(), "blake3:op-b"); f.count("up") != 2 {
+	if _, err := r.Outcomes(context.Background(), "blake3:op-b"); err != nil {
+		t.Fatal(err)
+	}
+	if f.count("up") != 2 {
 		t.Errorf("another op is its own cache entry: asked up %d times, want 2", f.count("up"))
 	}
 	now = now.Add(time.Second)
