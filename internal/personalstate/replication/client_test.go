@@ -42,6 +42,7 @@ func (s *epochState) PutSnapshot(context.Context, protocol.EncryptedSnapshot) er
 func (s *epochState) HeldChanges(context.Context, string, []string) ([]string, error) {
 	return nil, nil
 }
+
 func (s *epochState) Base(context.Context, string) (protocol.EncryptedSnapshot, bool, error) {
 	return protocol.EncryptedSnapshot{}, false, nil
 }

@@ -192,34 +192,15 @@ func (s *Store) HeldChanges(ctx context.Context, spaceID string, ids []string) (
 	if _, err := s.Space(ctx, spaceID); err != nil {
 		return nil, err
 	}
-	held := make(map[string]bool, len(ids))
-	const batch = 500 // well under SQLite's bound on host parameters
-	for start := 0; start < len(ids); start += batch {
-		chunk := ids[start:min(start+batch, len(ids))]
-		args := make([]any, 0, len(chunk)+1)
-		args = append(args, spaceID)
-		for _, id := range chunk {
-			args = append(args, id)
-		}
-		rows, err := s.reader.QueryContext(ctx,
-			`SELECT change_id FROM encrypted_changes WHERE space_id = ? AND change_id IN (?`+
-				strings.Repeat(",?", len(chunk)-1)+`)`, args...)
-		if err != nil {
-			return nil, fmt.Errorf("personalstate/store: confirming held changes: %w", err)
-		}
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("personalstate/store: confirming held changes: %w", err)
-			}
-			held[id] = true
-		}
-		if err := rows.Close(); err != nil {
-			return nil, fmt.Errorf("personalstate/store: confirming held changes: %w", err)
-		}
+	graph, err := s.changeGraph(ctx, spaceID)
+	if err != nil {
+		return nil, err
 	}
-	out := make([]string, 0, len(held))
+	held := make(map[string]bool, len(graph))
+	for _, c := range graph {
+		held[c.ChangeID] = true
+	}
+	out := make([]string, 0, len(ids))
 	for _, id := range ids {
 		if held[id] {
 			out = append(out, id)
