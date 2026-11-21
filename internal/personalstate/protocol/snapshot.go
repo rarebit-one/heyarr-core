@@ -23,6 +23,17 @@ var (
 	ErrSnapshotIDMismatch = errors.New("protocol: snapshot id does not match its content")
 )
 
+// MaxSnapshotBody bounds the JSON body of one pushed snapshot, on the device
+// route and on the peer route alike, so a snapshot a device can push is one every
+// sibling accepts when it replicates. A snapshot folds a whole space, not one
+// delta, so it gets its own bound instead of a change's. A synthetic vault drive of
+// 10,000 entries with full ADR-0113 metadata, a fifth of them with a second
+// version, and a flat-history frontier of 10,000 ids (its first snapshot, ADR-0101)
+// measured 10.4 MiB as a push body; 64 MiB leaves room for roughly six times that,
+// plus a composite's albums and policy. The decode still streams from a bounded
+// reader, so the bound is a ceiling, not an allocation.
+const MaxSnapshotBody = 64 << 20
+
 // An EncryptedSnapshot is a materialised state at a causal point, as the peer
 // holds it. Frontier is the set of change heads the snapshot subsumes: a device
 // reaching state from this snapshot then applies only the changes NOT in the

@@ -399,6 +399,12 @@ stable.
   alternative.
 
 ### Fixed
+- **A whole-space snapshot fits through the push routes** (#681). `POST
+  /spaces/{id}/snapshots` and the peer's `POST /peer/v1/state/{space}/snapshots`
+  accept a body of up to 64 MiB (`protocol.MaxSnapshotBody`), where they shared
+  the 4 MiB and 1 MiB bounds of a single change. A synthetic vault drive of
+  10,000 entries with full metadata measured 10.4 MiB as its first snapshot, so a
+  real vault's snapshot was refused at the device route and could not replicate.
 - **A plan for a registered device no longer says `transcode` while handing
   the bytes over direct** (#931, ADR-0123). With a `device_id` and a `client`
   that leaves `max_height` unset, the decision held the picture to the

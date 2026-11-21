@@ -50,7 +50,10 @@ func (a *API) putSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var snap protocol.EncryptedSnapshot
-	if err := httpapi.DecodeJSON(w, r, &snap, maxRequestBody); err != nil {
+	// A snapshot folds a whole space, so it has its own, larger bound than the
+	// rest of this surface; DecodeJSON reads it once, straight from the bounded
+	// body, never into an intermediate buffer.
+	if err := httpapi.DecodeJSON(w, r, &snap, protocol.MaxSnapshotBody); err != nil {
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
 		return
 	}

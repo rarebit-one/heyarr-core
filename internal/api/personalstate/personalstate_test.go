@@ -523,3 +523,38 @@ func TestListChangesRejectsABadCursor(t *testing.T) {
 		}
 	}
 }
+
+// TestPutSnapshotAcceptsMoreThanAChangeBody: a snapshot folds a whole space, so
+// its push is bounded by protocol.MaxSnapshotBody, not by this surface's
+// per-change maxRequestBody. A vault's first snapshot (ADR-0101) measures well over
+// the 4 MiB a change may be; the route must store it.
+//
+// SABOTAGE: decode putSnapshot's body with maxRequestBody again, and the push
+// below answers 400 "larger than 4194304 bytes".
+func TestPutSnapshotAcceptsMoreThanAChangeBody(t *testing.T) {
+	t.Parallel()
+	api := newAPI(t)
+	id := mustUUID(t)
+	if rec := call(t, api.createSpace, http.MethodPost, "/spaces", createSpaceRequest{ID: id, Kind: "personal"}, nil); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	// Base64 makes the body 4/3 of the ciphertext, so this is ~6 MiB on the wire.
+	big := bytes.Repeat([]byte{0xA5}, 9*maxRequestBody/8)
+	snap, err := protocol.NewSnapshot(id, nil, big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := call(t, api.putSnapshot, http.MethodPost, "/spaces/"+id+"/snapshots", snap, map[string]string{"id": id})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("push a %d-byte snapshot: %d %.200s", len(big), rec.Code, rec.Body)
+	}
+	rec = call(t, api.getSnapshot, http.MethodGet, "/spaces/"+id+"/snapshot", nil, map[string]string{"id": id})
+	var got protocol.EncryptedSnapshot
+	mustJSON(t, rec, &got)
+	if got.SnapshotID != snap.SnapshotID || !bytes.Equal(got.Ciphertext, big) {
+		t.Fatalf("served snapshot %s (%d bytes), want %s (%d bytes)", got.SnapshotID, len(got.Ciphertext), snap.SnapshotID, len(big))
+	}
+	if int64(rec.Body.Len()) >= protocol.MaxSnapshotBody {
+		t.Fatalf("the test snapshot (%d bytes) is not under the bound it means to exercise", rec.Body.Len())
+	}
+}
