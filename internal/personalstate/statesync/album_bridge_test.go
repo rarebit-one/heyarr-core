@@ -150,8 +150,8 @@ func TestAlbumCreatedOnOneDeviceReadsBackOnAnother(t *testing.T) {
 	if err := s.PutSnapshot(ctx, snap); err != nil {
 		t.Fatal(err)
 	}
-	if dropped, err := s.CompactChanges(ctx, sp.ID, heads); err != nil || dropped != 7 {
-		t.Fatalf("compaction dropped %d (err %v), want 7", dropped, err)
+	if res, err := s.CompactChanges(ctx, sp.ID, snap.SnapshotID, nil); err != nil || res.Dropped != 7 {
+		t.Fatalf("compaction dropped %d (err %v), want 7", res.Dropped, err)
 	}
 	storedSnap, _, err := s.LatestSnapshotFor(ctx, sp.ID)
 	if err != nil {

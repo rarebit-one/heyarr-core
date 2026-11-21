@@ -52,13 +52,20 @@ func startStatePlaneReplication(ctx context.Context, db *sqlite.DB, eventLog *ev
 		log.Error("personal-state replication beat: opening the store failed; the beat will not run", "error", err)
 		return
 	}
+	// The beat audits each (peer, space) on its first pass and then hourly
+	// (#681, #682): the audit sends every change id, so it is spaced, and an
+	// acknowledgement compaction waits on lags replication by at most that.
 	reconciler := replication.NewReconciler(
 		store,
 		replication.NewClient(material, log),
 		fullPeerLister{members: members, self: selfPeerID},
-		eventLog, log)
+		eventLog, log).AuditEvery(stateAuditInterval, nil)
 	runStateReplicationBeat(ctx, reconciler, interval, log, wallTicker)
 }
+
+// stateAuditInterval spaces the beat's audit of each (peer, space). The on-demand
+// route audits on every call.
+const stateAuditInterval = time.Hour
 
 // stateReconciler is the one thing the beat drives — the on-demand reconciler's
 // own entry point. An interface so a test can assert the beat CALLS it on a tick

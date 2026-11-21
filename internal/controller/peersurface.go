@@ -659,7 +659,9 @@ func (p peerPieces) ReadPiece(
 type personalStateBackend struct{ store *psstore.Store }
 
 func (p personalStateBackend) HeadsFor(ctx context.Context, spaceID string) ([]string, error) {
-	heads, err := p.store.HeadsFor(ctx, spaceID)
+	// The pinned base's frontier rides with the heads, so a sibling does not
+	// resend what this peer compacted (#682).
+	heads, err := p.store.OfferedHeads(ctx, spaceID)
 	return heads, translateStateErr(err)
 }
 
@@ -695,6 +697,21 @@ func (p personalStateBackend) PutSnapshot(ctx context.Context, snap protocol.Enc
 	return translateStateErr(p.store.PutSnapshot(ctx, snap))
 }
 
+func (p personalStateBackend) HeldChanges(ctx context.Context, spaceID string, ids []string) ([]string, error) {
+	held, err := p.store.HeldChanges(ctx, spaceID, ids)
+	return held, translateStateErr(err)
+}
+
+func (p personalStateBackend) Base(ctx context.Context, spaceID string) (protocol.EncryptedSnapshot, bool, error) {
+	base, ok, err := p.store.Base(ctx, spaceID)
+	return base, ok, translateStateErr(err)
+}
+
+func (p personalStateBackend) PinBase(ctx context.Context, spaceID, snapshotID string) (bool, error) {
+	pinned, err := p.store.PinBase(ctx, spaceID, snapshotID)
+	return pinned, translateStateErr(err)
+}
+
 // translateStateErr maps the store's sentinels into the peer surface's own, so
 // peerapi answers 404/409/400 without importing persistence: an unknown space
 // becomes ErrNoSuchSpace; a wrap at a superseded or unreached key epoch, or a
@@ -716,6 +733,10 @@ func translateStateErr(err error) error {
 		return fmt.Errorf("%w: %w", peerapi.ErrKeyEpochAhead, err)
 	case errors.Is(err, psstore.ErrKeyHistoryConflict):
 		return fmt.Errorf("%w: %w", peerapi.ErrKeyHistoryFork, err)
+	case errors.Is(err, psstore.ErrUnknownSnapshot):
+		return fmt.Errorf("%w: %w", peerapi.ErrSnapshotNotHeld, err)
+	case errors.Is(err, psstore.ErrBaseNotCovering):
+		return fmt.Errorf("%w: %w", peerapi.ErrBaseNotCovering, err)
 	case errors.Is(err, spaces.ErrUnknownKind),
 		errors.Is(err, psstore.ErrEmptyRecipient),
 		errors.Is(err, psstore.ErrEmptyWrapped),

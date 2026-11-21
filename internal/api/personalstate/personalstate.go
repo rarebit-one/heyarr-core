@@ -59,6 +59,10 @@ type API struct {
 // route answers 503 rather than 500.
 type Replicator interface {
 	ReconcileAll(ctx context.Context) (replicated, deferred int, err error)
+	// FullPeerIDs lists the trusted Full Peers this node replicates to, read
+	// fresh, so compaction waits for exactly the peers whose acknowledgement
+	// proves it safe (#681). A node with no replicator has none.
+	FullPeerIDs(ctx context.Context) ([]string, error)
 }
 
 // RecipientAuthorizer reports the set of encryption keys a space key may be
@@ -139,6 +143,10 @@ func New(opts Options) (*API, error) {
 		log:     log.With("component", "personalstate-api"),
 	}, nil
 }
+
+// CodeBaseNotCovering is the problem code of a compaction naming a snapshot that
+// does not provably cover the space's pinned base (#681).
+const CodeBaseNotCovering = "base_not_covering"
 
 // CodeWrapRecipientNotAllowed is the problem code of a wrap refused by
 // enrol-before-wrap: its recipient is not an enrolled device, a recovery key,
@@ -246,6 +254,7 @@ func (a *API) Mount(r chi.Router) {
 	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/key-history", a.listKeyHistory)
 	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/changes", a.listChanges)
 	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/snapshot", a.getSnapshot)
+	r.With(httpapi.RefuseGuest).Get("/spaces/{id}/snapshot/base", a.getSnapshotBase)
 
 	write := r.With(httpapi.RequireScope(auth.ScopeWrite))
 	admin := r.With(httpapi.RefuseRestricted, httpapi.RequireScope(auth.ScopeAdmin))
@@ -691,6 +700,12 @@ func (a *API) failStore(w http.ResponseWriter, r *http.Request, doing string, er
 		errors.Is(err, protocol.ErrSnapshotIncomplete),
 		errors.Is(err, protocol.ErrSnapshotIDMismatch):
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+	case errors.Is(err, store.ErrUnknownSnapshot):
+		httpapi.Fail(w, r, problem.NotFound(err.Error()))
+	case errors.Is(err, store.ErrBaseNotCovering):
+		httpapi.Fail(w, r, problem.Conflict(
+			"the snapshot does not cover the space's pinned compaction base; compact against a newer snapshot ("+err.Error()+")").
+			WithCode(CodeBaseNotCovering))
 	default:
 		a.log.Error(doing+" failed",
 			"request_id", httpapi.RequestIDFrom(r.Context()), "error", err)

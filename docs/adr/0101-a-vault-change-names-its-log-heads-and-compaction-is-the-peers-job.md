@@ -1,6 +1,6 @@
 # 0101. A vault change names the log heads it saw, a device snapshots, and compaction stays the peer's job
 
-**Status:** Proposed
+**Status:** Accepted (amended 2026-11-21). Accepted by the maintainer on 2026-11-21 (relayed).
 **Date:** 2026-09-28
 **Milestone:** M9 — Encrypted personal state (the vault drive surface)
 
@@ -144,3 +144,60 @@ ADR-0095 (the drive CRDT and its internal causality), ADR-0049 (snapshots are
 encrypted under the space key), ADR-0018 (nothing is deleted inline, and the
 compaction job follows the same caution), §43, §44, §45. Tracks heyarr-kmp#71,
 and follows heyarr-kmp#70 and #110.
+
+## Amendment: snapshot trust lands (2026-11-21, #681, #682)
+
+Accepted by the maintainer on 2026-11-21 (relayed). This amendment records the
+choices the decision above left open, in the order the gate lists them.
+
+- **The frontier is authenticated** (#683, already shipped). Cold start trusts
+  only a snapshot whose envelope verifies. A legacy, unauthenticated snapshot is
+  never a cold-start seed, and `heyarr space compact` refuses one unless the
+  operator passes `--unverified`.
+- **Compaction names its snapshot, and the snapshot becomes the pinned base.**
+  `POST /spaces/{id}/compact` takes `{"snapshot_id"}` and no longer accepts a
+  frontier. The named snapshot is pinned as the space's compaction base (one per
+  space, `snapshot_bases`). A new base must cover the old one, which the peer
+  checks without a key: every head of the old base is reachable from the new
+  base's frontier through held changes and the parents they name. A compaction
+  only drops changes the pinned snapshot subsumes.
+- **Cold start prefers the base.** `GET /spaces/{id}/snapshot` answers the
+  newest snapshot whose frontier covers the pinned base. When none does, it
+  answers the base itself, and with no base, the newest snapshot as before.
+  `GET /spaces/{id}/snapshot/base` answers the base alone, so a device whose
+  first choice fails to verify can fall back to it before it falls back to a
+  full pull. The peer chooses by causal metadata, and the device verifies the
+  envelope. Neither one trusts the other's half.
+- **The base replicates.** After a space's changes, a reconcile pushes the base
+  snapshot, then the latest, then pins the base on the target (`POST
+  /peer/v1/state/{space}/base`). A target refuses a pin that does not cover its
+  own base (409 `base_not_covering`). The source treats that refusal as
+  "behind", the way it treats a superseded wrap. It skips the pin and does not
+  fail the space. A peer offers its base's frontier alongside its heads, so a
+  sibling's heads-based push never resends what that peer compacted.
+- **Acknowledgements are durable and confirmed by the target.** A new peer
+  route, `POST /peer/v1/state/{space}/held`, answers which of the offered change
+  ids the target holds as rows, and the target's pinned base. The reconcile's
+  audit counts as confirmed every id the target holds, plus every id in the
+  causal history of the target's base frontier, walked over the source's own
+  log. It resends the rest parents first (#682's repair), and only when every
+  push succeeded does it record `state_peer_acks(space, peer) = (Heads(log),
+  base)`. A target's reported heads are never taken as proof.
+- **Compaction is proven by those acks.** A change is dropped only if the pinned
+  snapshot subsumes it and it is in the acked causal history of **every**
+  trusted Full Peer whose ack names this same base. While any peer lacks such an
+  ack, the call pins the base, drops nothing, and lists the peers it is waiting
+  for. Running it again after the next audited reconcile does the drop. A node
+  with no trusted Full Peers has no one to wait for. That stays as before: its
+  log is the only copy, and the base makes it recoverable.
+- **When the audit runs.** Every on-demand reconcile (`POST
+  /api/v1/state/replicate`) audits. The beat audits on its first pass after
+  start, which is the "once on upgrade" run, and then hourly, so acks lag
+  replication by at most an hour. A pin or audit failure is logged and recorded
+  as a deferral. It never fails the space's replication: a peer that predates the
+  routes still receives every change and snapshot, it just never acks, and
+  nothing is compacted against it.
+
+What would make us revisit: a repair whose id lists outgrow the request bound in
+practice (then send a range digest instead of ids), or a deployment that needs
+compaction to wait for fewer than every trusted Full Peer.

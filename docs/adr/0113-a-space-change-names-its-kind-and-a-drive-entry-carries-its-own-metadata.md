@@ -85,8 +85,13 @@ lives inside change ciphertext; the server's view is unchanged.
    one-latest-snapshot model stays correct. A client that cannot write a
    composite must not snapshot such a space. `heyarr space snapshot`, which
    folds only playlists, now refuses one. The composite's wire shape is pinned
-   by golden vectors when the first client snapshots a space with several
-   kinds; none does yet.
+   by golden vectors (`testdata/vectors/composite.json`, #927):
+   `{"k":"composite","v":1,"states":{<kind>:<snapshot>},"verbatim":[<base64
+   plaintext>]}`, states ordered by kind and verbatim by bytes. **Confirmed
+   2026-11-21** (the maintainer, relayed): this shape is what this decision
+   needs. It carries every folded kind's own snapshot and every unfoldable
+   change verbatim, and each single-kind reader refuses it rather than reading
+   it as empty.
 
 These are client encodings. **No route, table or server behaviour changes**, and
 Invariant 6 holds as before. Where copies of a blob live across sites stays

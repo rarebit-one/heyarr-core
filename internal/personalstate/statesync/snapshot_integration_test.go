@@ -122,14 +122,14 @@ func TestFreshDeviceReachesStateFromSnapshotPlusTail(t *testing.T) {
 	// Add a tail change AFTER the snapshot.
 	put(t, ctx, s, m, sp.ID, "tail-item-four")
 
-	// Compact: every replica has acknowledged the snapshot's frontier, so the
+	// Compact against the snapshot, on a node with no other replica, so the
 	// pre-snapshot changes are dropped. The tail ("tail-item-four") survives.
-	dropped, err := s.CompactChanges(ctx, sp.ID, heads)
+	res, err := s.CompactChanges(ctx, sp.ID, snap.SnapshotID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dropped != 3 {
-		t.Fatalf("compaction dropped %d changes, want 3", dropped)
+	if res.Dropped != 3 {
+		t.Fatalf("compaction dropped %d changes, want 3", res.Dropped)
 	}
 
 	// A FRESH device with the same key opens the space, fetches the snapshot +

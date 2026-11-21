@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	peerapi "github.com/rarebit-one/heyarr-core/internal/api/peerapi"
 	"github.com/rarebit-one/heyarr-core/internal/events"
 	"github.com/rarebit-one/heyarr-core/internal/peer/mtls"
 	"github.com/rarebit-one/heyarr-core/internal/personalstate/protocol"
@@ -55,7 +56,7 @@ func (p storePusher) PushKeyHistory(ctx context.Context, _ replication.Target, s
 }
 
 func (p storePusher) Heads(ctx context.Context, _ replication.Target, spaceID string) ([]string, error) {
-	heads, err := p.target.HeadsFor(ctx, spaceID)
+	heads, err := p.target.OfferedHeads(ctx, spaceID) // what the peer route offers
 	if errors.Is(err, store.ErrUnknownSpace) {
 		return nil, nil // the target does not hold the space yet — it is missing everything
 	}
@@ -68,6 +69,20 @@ func (p storePusher) PushChange(ctx context.Context, _ replication.Target, ch pr
 
 func (p storePusher) PushSnapshot(ctx context.Context, _ replication.Target, snap protocol.EncryptedSnapshot) error {
 	return p.target.PutSnapshot(ctx, snap)
+}
+
+func (p storePusher) PinBase(ctx context.Context, _ replication.Target, spaceID, snapshotID string) error {
+	_, err := p.target.PinBase(ctx, spaceID, snapshotID)
+	if errors.Is(err, store.ErrBaseNotCovering) {
+		// What the peer route answers (409 base_not_covering) and the real
+		// client turns into ErrBaseSuperseded.
+		return fmt.Errorf("%w: %w", replication.ErrBaseSuperseded, err)
+	}
+	return err
+}
+
+func (p storePusher) Held(ctx context.Context, _ replication.Target, spaceID string, ids []string) (replication.HeldAnswer, error) {
+	return storeHeld(ctx, p.target, spaceID, ids)
 }
 
 // downPusher is an unreachable peer: every call fails, as a network partition
@@ -98,6 +113,29 @@ func (downPusher) PushChange(context.Context, replication.Target, protocol.Encry
 
 func (downPusher) PushSnapshot(context.Context, replication.Target, protocol.EncryptedSnapshot) error {
 	return errDown
+}
+
+func (downPusher) PinBase(context.Context, replication.Target, string, string) error {
+	return errDown
+}
+
+func (downPusher) Held(context.Context, replication.Target, string, []string) (replication.HeldAnswer, error) {
+	return replication.HeldAnswer{}, errDown
+}
+
+// storeHeld answers a held query from a real store, as the peer route does.
+func storeHeld(ctx context.Context, target *store.Store, spaceID string, ids []string) (replication.HeldAnswer, error) {
+	held, err := target.HeldChanges(ctx, spaceID, ids)
+	if err != nil {
+		return replication.HeldAnswer{}, err
+	}
+	ans := replication.HeldAnswer{Held: held}
+	if base, ok, err := target.Base(ctx, spaceID); err != nil {
+		return replication.HeldAnswer{}, err
+	} else if ok {
+		ans.Base = &peerapi.StateBase{SnapshotID: base.SnapshotID, Frontier: base.Frontier}
+	}
+	return ans, nil
 }
 
 // seed writes a space, two wrapped keys and two causally-linked changes into a
@@ -382,6 +420,14 @@ func (r routingPusher) PushChange(ctx context.Context, t replication.Target, ch 
 
 func (r routingPusher) PushSnapshot(ctx context.Context, t replication.Target, snap protocol.EncryptedSnapshot) error {
 	return r.route(t).PushSnapshot(ctx, t, snap)
+}
+
+func (r routingPusher) PinBase(ctx context.Context, t replication.Target, s, id string) error {
+	return r.route(t).PinBase(ctx, t, s, id)
+}
+
+func (r routingPusher) Held(ctx context.Context, t replication.Target, s string, ids []string) (replication.HeldAnswer, error) {
+	return r.route(t).Held(ctx, t, s, ids)
 }
 
 // keyState is what a peer holds of a space's key: its epoch and, per recipient,

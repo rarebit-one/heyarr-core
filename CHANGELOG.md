@@ -10,6 +10,27 @@ stable.
 ## [Unreleased]
 
 ### Added
+- **Snapshot trust: a pinned compaction base, replicated, and compaction proven
+  by what every peer confirmed** (#681, #682, ADR-0101 amendment).
+  `POST /api/v1/spaces/{id}/compact` now names a `snapshot_id` and pins it as
+  the space's compaction base. It drops a change only when that snapshot
+  subsumes it and every trusted Full Peer has a durable acknowledgement that
+  names the base and covers the change. While any peer lacks one, it pins,
+  drops nothing, and lists the peers in `waiting_for`; run it again after the
+  next audited reconcile. A caller-supplied `frontier` is refused.
+  `GET /api/v1/spaces/{id}/snapshot` answers the newest snapshot that covers the
+  base, never an older one that merely arrived last, and the new
+  `GET …/snapshot/base` answers the base alone, for a device whose first choice
+  fails to verify. Replication carries the base and its pin to every Full Peer
+  (`POST /peer/v1/state/{space}/base`), and a peer offers its base's frontier
+  with its heads, so a sibling no longer resends what it compacted. A new audit
+  (`POST /peer/v1/state/{space}/held`) asks each peer which changes it holds,
+  resends any ancestor it lost (#682's repair), and only then records its
+  acknowledgement. `heyarr space compact` opens the space and refuses a snapshot
+  whose frontier is not authenticated (`--unverified` skips that, for an
+  operator without a key). Every on-demand reconcile audits; the beat audits on
+  start and then hourly. New events: `personalstate.snapshot.pinned`,
+  `personalstate.space.peer_acked`, `personalstate.space.repaired`.
 - **The origin sees what each sibling did with its choice** (#924, ADR-0119
   #924 amendment). Acquisition status's `published` block now carries
   `siblings`: each sibling's own outcome for the acquire op (`applied`,
@@ -382,6 +403,13 @@ stable.
   profile with `vault.enabled=false`.
 
 ### Upgrading
+- **`heyarr space compact` and `POST /spaces/{id}/compact` changed shape**
+  (#681). The route takes `{"snapshot_id"}` and answers `{base, pinned,
+  dropped, waiting_for}`; a body with `frontier` is a 400. The command now opens
+  the space with this device's key (`--device-dir`) to verify the snapshot, or
+  takes `--unverified`. Upgrade every peer before compacting a space that has
+  Full Peers: a peer that predates the audit route never acknowledges, so
+  compaction waits on it forever (and drops nothing).
 - **A config library's `content_type` must be one Heyarr understands**
   (#896). `movie`, `series`, `music`, `book`, `document`, `game` or `rom`,
   the same set `POST /libraries` has enforced since #227. A node whose

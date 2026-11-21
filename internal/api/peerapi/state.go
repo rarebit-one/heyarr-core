@@ -64,12 +64,26 @@ var ErrKeyEpochAhead = errors.New("peerapi: the wrapped key seals a key epoch th
 // with DIFFERENT bytes — two rotations forked the chain. A 409; never overwritten.
 var ErrKeyHistoryFork = errors.New("peerapi: a different key-history row is held for that epoch")
 
+// ErrSnapshotNotHeld is a base pin naming a snapshot this peer does not hold for
+// the space. A 409: the sibling pushes the snapshot before pinning it, so this
+// means the push was lost or reordered.
+var ErrSnapshotNotHeld = errors.New("peerapi: this peer does not hold that snapshot")
+
+// ErrBaseNotCovering is a base pin whose snapshot does not provably cover the
+// base this peer already pinned (#681). A 409 with CodeBaseNotCovering, which a
+// replicating sibling treats as "this node is behind": it skips the pin rather
+// than failing the space, as it does a superseded wrap.
+var ErrBaseNotCovering = errors.New("peerapi: the snapshot does not cover this peer's pinned base")
+
 // The problem codes the key-epoch refusals carry, so a sibling branches on a
 // stable code rather than on the prose.
 const (
 	CodeKeySuperseded  = "key_epoch_superseded"
 	CodeKeyEpochAhead  = "key_epoch_ahead"
 	CodeKeyHistoryFork = "key_history_conflict"
+	// CodeBaseNotCovering and CodeSnapshotNotHeld are the base pin's refusals.
+	CodeBaseNotCovering = "base_not_covering"
+	CodeSnapshotNotHeld = "base_not_held"
 )
 
 // StateStore is the peer's opaque personal-state storage, as this surface needs
@@ -81,7 +95,9 @@ const (
 // nil is a legitimate state — a node holding no personal state still MOUNTS the
 // routes and answers 503, exactly like every other optional capability here.
 type StateStore interface {
-	// HeadsFor returns a space's causal frontier. ErrNoSuchSpace if not held.
+	// HeadsFor returns a space's causal frontier: the heads of its changes plus
+	// the frontier of its pinned compaction base, whose history this peer holds
+	// as the base rather than as rows (#682). ErrNoSuchSpace if not held.
 	HeadsFor(ctx context.Context, spaceID string) ([]string, error)
 	// ChangesFor returns every change held for a space, oldest first.
 	// ErrNoSuchSpace if not held.
@@ -112,6 +128,16 @@ type StateStore interface {
 	// PutSnapshot stores an encrypted snapshot after verifying its content-address
 	// (§44). Idempotent on the id. ErrNoSuchSpace if the space is not held here.
 	PutSnapshot(ctx context.Context, snap protocol.EncryptedSnapshot) error
+	// HeldChanges answers which of ids this peer holds as change rows of the
+	// space, in the order asked (#681, #682). ErrNoSuchSpace if not held.
+	HeldChanges(ctx context.Context, spaceID string, ids []string) ([]string, error)
+	// Base returns the space's pinned compaction base, and whether it has one.
+	// ErrNoSuchSpace if not held.
+	Base(ctx context.Context, spaceID string) (protocol.EncryptedSnapshot, bool, error)
+	// PinBase pins a held snapshot as the space's compaction base, reporting
+	// whether it changed. ErrSnapshotNotHeld if the snapshot is not held,
+	// ErrBaseNotCovering if it does not cover the current base.
+	PinBase(ctx context.Context, spaceID, snapshotID string) (bool, error)
 }
 
 // stateHeadsResponse is the offer side: the space's causal heads.
@@ -252,6 +278,10 @@ func (s *Server) failState(w http.ResponseWriter, r *http.Request, principal Pri
 			WithCode(CodeKeyEpochAhead))
 	case errors.Is(err, ErrKeyHistoryFork):
 		httpapi.Fail(w, r, problem.Conflict(err.Error()).WithCode(CodeKeyHistoryFork))
+	case errors.Is(err, ErrBaseNotCovering):
+		httpapi.Fail(w, r, problem.Conflict(err.Error()).WithCode(CodeBaseNotCovering))
+	case errors.Is(err, ErrSnapshotNotHeld):
+		httpapi.Fail(w, r, problem.Conflict(err.Error()).WithCode(CodeSnapshotNotHeld))
 	case errors.Is(err, protocol.ErrIDMismatch), errors.Is(err, protocol.ErrIncomplete), errors.Is(err, ErrInvalidState),
 		errors.Is(err, protocol.ErrSnapshotIDMismatch), errors.Is(err, protocol.ErrSnapshotIncomplete):
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))

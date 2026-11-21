@@ -66,7 +66,7 @@ func (p storePusher) PushKeyHistory(ctx context.Context, _ replication.Target, s
 }
 
 func (p storePusher) Heads(ctx context.Context, _ replication.Target, spaceID string) ([]string, error) {
-	heads, err := p.target.HeadsFor(ctx, spaceID)
+	heads, err := p.target.OfferedHeads(ctx, spaceID) // what the peer route offers
 	if err != nil {
 		return nil, nil // not held yet: the target is missing everything
 	}
@@ -79,6 +79,16 @@ func (p storePusher) PushChange(ctx context.Context, _ replication.Target, ch pr
 
 func (p storePusher) PushSnapshot(ctx context.Context, _ replication.Target, snap protocol.EncryptedSnapshot) error {
 	return p.target.PutSnapshot(ctx, snap)
+}
+
+func (p storePusher) PinBase(ctx context.Context, _ replication.Target, spaceID, snapshotID string) error {
+	_, err := p.target.PinBase(ctx, spaceID, snapshotID)
+	return err
+}
+
+func (p storePusher) Held(ctx context.Context, _ replication.Target, spaceID string, ids []string) (replication.HeldAnswer, error) {
+	held, err := p.target.HeldChanges(ctx, spaceID, ids)
+	return replication.HeldAnswer{Held: held}, err
 }
 
 // reconcile replicates every space on source to target, one direction.

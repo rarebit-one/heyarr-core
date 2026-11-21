@@ -248,15 +248,36 @@ type snapshotStored struct {
 	SnapshotID string `json:"snapshot_id"`
 }
 
-type compactResult struct {
-	Dropped int `json:"dropped"`
+// CompactResult is what a compaction did (#681): the base it pinned, whether
+// this call moved it, how many changes it dropped, and the trusted Full Peers
+// whose acknowledgement does not yet name the base (nothing is dropped while any
+// remain).
+type CompactResult struct {
+	Base       string   `json:"base"`
+	Pinned     bool     `json:"pinned"`
+	Dropped    int      `json:"dropped"`
+	WaitingFor []string `json:"waiting_for"`
 }
 
-// Snapshot fetches the latest encrypted snapshot for a space. ok is false (with a
-// nil error) when the space has none yet.
+// Snapshot fetches the snapshot a cold-starting device should start from: the
+// newest that covers the space's pinned compaction base, else the base, else the
+// newest (#681). ok is false (with a nil error) when the space has none yet.
 func (c *Client) Snapshot(ctx context.Context, spaceID string) (protocol.EncryptedSnapshot, bool, error) {
 	var out protocol.EncryptedSnapshot
 	if err := c.Get(ctx, "/spaces/"+url.PathEscape(spaceID)+"/snapshot", nil, &out); err != nil {
+		if IsNotFound(err) {
+			return protocol.EncryptedSnapshot{}, false, nil
+		}
+		return protocol.EncryptedSnapshot{}, false, err
+	}
+	return out, true, nil
+}
+
+// SnapshotBase fetches the space's pinned compaction base. ok is false (with a
+// nil error) when nothing was ever compacted against a pin.
+func (c *Client) SnapshotBase(ctx context.Context, spaceID string) (protocol.EncryptedSnapshot, bool, error) {
+	var out protocol.EncryptedSnapshot
+	if err := c.Get(ctx, "/spaces/"+url.PathEscape(spaceID)+"/snapshot/base", nil, &out); err != nil {
 		if IsNotFound(err) {
 			return protocol.EncryptedSnapshot{}, false, nil
 		}
@@ -275,13 +296,13 @@ func (c *Client) PushSnapshot(ctx context.Context, snap protocol.EncryptedSnapsh
 	return out.SnapshotID, nil
 }
 
-// Compact drops the changes the latest snapshot subsumes and every replica holds
-// (the acknowledged frontier), returning how many were dropped.
-func (c *Client) Compact(ctx context.Context, spaceID string, frontier []string) (int, error) {
-	var out compactResult
-	body := map[string][]string{"frontier": frontier}
+// Compact compacts a space against the named snapshot, pinning it as the base
+// and dropping what it subsumes and every trusted Full Peer confirmed (#681).
+func (c *Client) Compact(ctx context.Context, spaceID, snapshotID string) (CompactResult, error) {
+	var out CompactResult
+	body := map[string]string{"snapshot_id": snapshotID}
 	if err := c.Post(ctx, "/spaces/"+url.PathEscape(spaceID)+"/compact", body, &out); err != nil {
-		return 0, err
+		return CompactResult{}, err
 	}
-	return out.Dropped, nil
+	return out, nil
 }
