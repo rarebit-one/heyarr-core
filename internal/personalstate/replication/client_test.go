@@ -39,6 +39,14 @@ func (s *epochState) LatestSnapshotFor(context.Context, string) (protocol.Encryp
 	return protocol.EncryptedSnapshot{}, false, nil
 }
 func (s *epochState) PutSnapshot(context.Context, protocol.EncryptedSnapshot) error { return nil }
+func (s *epochState) HeldChanges(context.Context, string, []string) ([]string, error) {
+	return nil, nil
+}
+
+func (s *epochState) Base(context.Context, string) (protocol.EncryptedSnapshot, bool, error) {
+	return protocol.EncryptedSnapshot{}, false, nil
+}
+func (s *epochState) PinBase(context.Context, string, string) (bool, error) { return false, nil }
 
 func (s *epochState) PutWrappedKey(_ context.Context, _, recipient string, _ []byte, epoch int) error {
 	s.mu.Lock()

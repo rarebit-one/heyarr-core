@@ -216,3 +216,37 @@ func TestHaveAllReportsGapsAndCompleteness(t *testing.T) {
 		t.Fatalf("HaveAll named gap %s, want %s", gap, ids[2])
 	}
 }
+
+// TestCovers pins the keyless rule a peer uses to replace or bypass a pinned
+// compaction base (#681): the newer frontier must reach every head of the base,
+// through held changes or a parent a held change names.
+func TestCovers(t *testing.T) {
+	t.Parallel()
+	full, ids := chain(t, "s", 5) // 0←1←2←3←4
+	fork, err := protocol.NewChange("s", []string{ids[1]}, []byte("fork"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := append(append([]protocol.EncryptedChange(nil), full...), fork)
+	compacted := full[3:] // 0..2 compacted away; 3 still names 2 as its parent
+
+	for _, tc := range []struct {
+		name           string
+		have           []protocol.EncryptedChange
+		frontier, base []string
+		want           bool
+	}{
+		{"a point covers itself", all, []string{ids[2]}, []string{ids[2]}, true},
+		{"a descendant covers its ancestor", all, []string{ids[4]}, []string{ids[2]}, true},
+		{"an ancestor does not cover a descendant", all, []string{ids[2]}, []string{ids[4]}, false},
+		{"a concurrent branch does not cover", all, []string{fork.ChangeID}, []string{ids[3]}, false},
+		{"a merge of both branches covers each", all, []string{ids[4], fork.ChangeID}, []string{ids[3], fork.ChangeID}, true},
+		{"after compaction, a surviving child's parent link proves it", compacted, []string{ids[4]}, []string{ids[2]}, true},
+		{"after compaction, an ancestry it cannot walk is not covered", compacted, []string{ids[4]}, []string{ids[1]}, false},
+		{"an empty base is covered", all, []string{ids[0]}, nil, true},
+	} {
+		if got := protocol.Covers(tc.have, tc.frontier, tc.base); got != tc.want {
+			t.Errorf("%s: Covers = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

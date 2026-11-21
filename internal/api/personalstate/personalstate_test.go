@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -251,12 +252,15 @@ func mustUUID(t *testing.T) string {
 type fakeReplicator struct {
 	replicated, deferred int
 	called               bool
+	peers                []string
 }
 
 func (f *fakeReplicator) ReconcileAll(context.Context) (int, int, error) {
 	f.called = true
 	return f.replicated, f.deferred, nil
 }
+
+func (f *fakeReplicator) FullPeerIDs(context.Context) ([]string, error) { return f.peers, nil }
 
 // TestReplicateEndpointDrivesTheReconciler: POST /state/replicate runs the
 // reconciler and returns its counts; with no reconciler it is a 503.
@@ -556,5 +560,73 @@ func TestPutSnapshotAcceptsMoreThanAChangeBody(t *testing.T) {
 	}
 	if int64(rec.Body.Len()) >= protocol.MaxSnapshotBody {
 		t.Fatalf("the test snapshot (%d bytes) is not under the bound it means to exercise", rec.Body.Len())
+	}
+}
+
+// TestCompactNamesItsSnapshotAndWaitsForPeers is the device route of #681:
+// compaction names a snapshot and pins it as the base; a caller-supplied
+// frontier is refused; and with a trusted Full Peer that has not confirmed the
+// base, nothing is dropped and the peer is named.
+func TestCompactNamesItsSnapshotAndWaitsForPeers(t *testing.T) {
+	t.Parallel()
+	db := newDB(t)
+	log, err := events.New(events.Options{Writer: db.Writer(), Reader: db.Reader()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.New(store.Options{Writer: db.Writer(), Reader: db.Reader(), Events: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := &fakeReplicator{peers: []string{"peer-b"}}
+	api, err := New(Options{Store: st, Replicator: rep})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := mustUUID(t)
+	if rec := call(t, api.createSpace, http.MethodPost, "/spaces", createSpaceRequest{ID: id, Kind: "personal"}, nil); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	ch, _ := protocol.NewChange(id, nil, []byte("OPAQUE"))
+	if err := st.PutChange(context.Background(), ch); err != nil {
+		t.Fatal(err)
+	}
+	snap, _ := protocol.NewSnapshot(id, []string{ch.ChangeID}, []byte("OPAQUE-SNAP"))
+	if rec := call(t, api.putSnapshot, http.MethodPost, "/spaces/"+id+"/snapshots", snap, map[string]string{"id": id}); rec.Code != http.StatusCreated {
+		t.Fatalf("push snapshot: %d %s", rec.Code, rec.Body)
+	}
+	params := map[string]string{"id": id}
+
+	if rec := call(t, api.getSnapshotBase, http.MethodGet, "/spaces/"+id+"/snapshot/base", nil, params); rec.Code != http.StatusNotFound {
+		t.Fatalf("base before any compaction: %d, want 404", rec.Code)
+	}
+	rec := call(t, api.compact, http.MethodPost, "/spaces/"+id+"/compact", map[string][]string{"frontier": {ch.ChangeID}}, params)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "caller-supplied frontier") {
+		t.Fatalf("compact with a frontier: %d %s, want a 400 naming the change", rec.Code, rec.Body)
+	}
+
+	var res compactResult
+	mustJSON(t, call(t, api.compact, http.MethodPost, "/spaces/"+id+"/compact", compactRequest{SnapshotID: snap.SnapshotID}, params), &res)
+	if res.Base != snap.SnapshotID || !res.Pinned || res.Dropped != 0 || len(res.WaitingFor) != 1 || res.WaitingFor[0] != "peer-b" {
+		t.Fatalf("compact = %+v, want the base pinned and peer-b awaited", res)
+	}
+	var base protocol.EncryptedSnapshot
+	mustJSON(t, call(t, api.getSnapshotBase, http.MethodGet, "/spaces/"+id+"/snapshot/base", nil, params), &base)
+	if base.SnapshotID != snap.SnapshotID {
+		t.Fatalf("snapshot/base = %s, want %s", base.SnapshotID, snap.SnapshotID)
+	}
+
+	// Once peer-b's audited ack names the base, the same call drops.
+	if err := st.RecordPeerAck(context.Background(), id, "peer-b", []string{ch.ChangeID}, snap.SnapshotID); err != nil {
+		t.Fatal(err)
+	}
+	mustJSON(t, call(t, api.compact, http.MethodPost, "/spaces/"+id+"/compact", compactRequest{SnapshotID: snap.SnapshotID}, params), &res)
+	if res.Dropped != 1 || len(res.WaitingFor) != 0 || res.Pinned {
+		t.Fatalf("second compact = %+v, want 1 dropped", res)
+	}
+
+	missing, _ := protocol.NewSnapshot(id, nil, []byte("NEVER-PUSHED"))
+	if rec := call(t, api.compact, http.MethodPost, "/spaces/"+id+"/compact", compactRequest{SnapshotID: missing.SnapshotID}, params); rec.Code != http.StatusNotFound {
+		t.Fatalf("compact against an unheld snapshot: %d, want 404", rec.Code)
 	}
 }

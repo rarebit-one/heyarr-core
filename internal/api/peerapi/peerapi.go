@@ -476,6 +476,12 @@ func (s *Server) routes() http.Handler {
 		// tail — ciphertext it cannot read.
 		r.Get("/state/{space}/snapshot", s.handleStateLatestSnapshot)
 		r.Post("/state/{space}/snapshots", s.handleStateSnapshotPush)
+		// Snapshot trust (#681, #682): a sibling pins its compaction base here
+		// once the base snapshot has landed, and its audit asks which change ids
+		// this peer holds, so an acknowledgement is what this peer confirmed,
+		// never what its heads imply.
+		r.Post("/state/{space}/base", s.handleStatePinBase)
+		r.Post("/state/{space}/held", s.handleStateHeld)
 		// Two-site vault placement (ADR-0114). The DESTINATION asks which
 		// blobs this node holds and wants kept there too, carrying its own
 		// held claim, and pulls what it is offered from the content route

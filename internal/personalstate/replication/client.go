@@ -52,7 +52,27 @@ type Pusher interface {
 	// PushSnapshot sends one opaque snapshot; the target verifies its
 	// content-address. Idempotent on the id.
 	PushSnapshot(ctx context.Context, t Target, snap protocol.EncryptedSnapshot) error
+	// PinBase pins a snapshot the target already holds as its compaction base
+	// (#681). Idempotent. ErrBaseSuperseded when the target's base is not
+	// covered by it — the caller skips the pin, it does not fail.
+	PinBase(ctx context.Context, t Target, spaceID, snapshotID string) error
+	// Held asks the target which of ids it holds as change rows of the space, and
+	// what base it has pinned (#681, #682). The target confirms each id itself.
+	Held(ctx context.Context, t Target, spaceID string, ids []string) (HeldAnswer, error)
 }
+
+// A HeldAnswer is what a target confirmed holding of a space: the ids it holds
+// as rows, and its pinned compaction base (nil for none), whose causal history
+// counts as held too.
+type HeldAnswer struct {
+	Held []string
+	Base *peerapi.StateBase
+}
+
+// ErrBaseSuperseded is a base pin the target refused because its own base is not
+// covered by the snapshot: this node is behind, or concurrent. It is skipped like
+// a superseded wrap, never a failure of the reconcile.
+var ErrBaseSuperseded = errors.New("replication: the target's pinned base is not covered by this node's")
 
 // ErrWrapSuperseded is a wrapped copy the target refused because it holds a newer
 // key epoch for the space (ADR-0103): this node is behind, and the copy would
@@ -136,6 +156,39 @@ func (c *Client) PushSnapshot(ctx context.Context, t Target, snap protocol.Encry
 	return c.post(ctx, t, statePath(snap.SpaceID, "/snapshots"), snap)
 }
 
+// PinBase POSTs a base pin to /peer/v1/state/{space}/base.
+func (c *Client) PinBase(ctx context.Context, t Target, spaceID, snapshotID string) error {
+	err := c.post(ctx, t, statePath(spaceID, "/base"), map[string]string{"snapshot_id": snapshotID})
+	var pe *postError
+	if errors.As(err, &pe) && pe.status == http.StatusConflict && pe.code == peerapi.CodeBaseNotCovering {
+		return fmt.Errorf("%w: %w", ErrBaseSuperseded, err)
+	}
+	return err
+}
+
+// Held POSTs the ids to /peer/v1/state/{space}/held in batches of
+// peerapi.MaxHeldQuery and gathers the answers.
+func (c *Client) Held(ctx context.Context, t Target, spaceID string, ids []string) (HeldAnswer, error) {
+	var out HeldAnswer
+	// One query even for no ids: it still answers the target's base.
+	for start := 0; ; start += peerapi.MaxHeldQuery {
+		chunk := ids[start:min(start+peerapi.MaxHeldQuery, len(ids))]
+		var resp struct {
+			Held []string           `json:"held"`
+			Base *peerapi.StateBase `json:"base"`
+		}
+		if err := c.postJSON(ctx, t, statePath(spaceID, "/held"), map[string][]string{"change_ids": chunk}, &resp); err != nil {
+			return HeldAnswer{}, err
+		}
+		out.Held = append(out.Held, resp.Held...)
+		out.Base = resp.Base
+		if start+peerapi.MaxHeldQuery >= len(ids) {
+			break
+		}
+	}
+	return out, nil
+}
+
 // Heads GETs the target's causal frontier from /peer/v1/state/{space}/heads.
 func (c *Client) Heads(ctx context.Context, t Target, spaceID string) ([]string, error) {
 	hc, closeIdle, err := c.clientFor(t.Peer)
@@ -196,6 +249,13 @@ func decodeHeads(body io.Reader, maxBytes int64) ([]string, error) {
 
 // post sends a JSON body and requires a 2xx, closing idle connections after.
 func (c *Client) post(ctx context.Context, t Target, path string, body any) error {
+	return c.postJSON(ctx, t, path, body, nil)
+}
+
+// postJSON is post that also decodes a 2xx answer into out, when out is not nil.
+// The answer is bounded like a heads response: a held answer carries the
+// target's base frontier, which can be as long as a flat log.
+func (c *Client) postJSON(ctx context.Context, t Target, path string, body, out any) error {
 	hc, closeIdle, err := c.clientFor(t.Peer)
 	if err != nil {
 		return err
@@ -230,6 +290,19 @@ func (c *Client) post(ctx context.Context, t Target, path string, body any) erro
 			code:   doc.Code,
 			msg:    fmt.Sprintf("replication: %s answered %d to POST %s: %s", t.Peer.PeerID, resp.StatusCode, path, strings.TrimSpace(string(raw))),
 		}
+	}
+	if out == nil {
+		return nil
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxHeadsResponseBytes+1))
+	if err != nil {
+		return fmt.Errorf("replication: reading %s's answer to POST %s: %w", t.Peer.PeerID, path, err)
+	}
+	if int64(len(raw)) > maxHeadsResponseBytes {
+		return fmt.Errorf("replication: %s's answer to POST %s exceeds %d bytes", t.Peer.PeerID, path, maxHeadsResponseBytes)
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("replication: decoding %s's answer to POST %s: %w", t.Peer.PeerID, path, err)
 	}
 	return nil
 }

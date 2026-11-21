@@ -1687,16 +1687,45 @@ paths:
     get:
       tags: [personal-state]
       operationId: getSpaceSnapshot
-      summary: The latest encrypted snapshot for a space — ciphertext (§44).
+      summary: The snapshot a cold-starting device should start from — ciphertext (§44, #681).
       description: |
-        Returns the most recent snapshot the peer holds — a materialised CRDT
-        state at a causal point, as ciphertext the peer never decrypted — so a
-        joining device syncs a bounded snapshot plus the tail rather than the
-        whole log. 404 when the space has no snapshot yet.
+        Returns a snapshot the peer holds — a materialised CRDT state at a
+        causal point, as ciphertext the peer never decrypted — so a joining
+        device syncs a bounded snapshot plus the tail rather than the whole
+        log. Once a compaction has pinned a base, it is the newest snapshot
+        whose frontier provably covers that base, else the base itself; a
+        snapshot that predates the base is passed over whatever its arrival
+        time. With no base it is the newest snapshot. The peer chooses by
+        causal metadata only: the device verifies the snapshot's
+        authenticated envelope and, if it does not verify, falls back to
+        `GET /api/v1/spaces/{id}/snapshot/base`. 404 when the space has no
+        snapshot yet.
       parameters: [{ $ref: "#/components/parameters/id" }]
       responses:
         "200":
           description: The latest snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EncryptedSnapshot" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/spaces/{id}/snapshot/base:
+    get:
+      tags: [personal-state]
+      operationId: getSpaceSnapshotBase
+      summary: The space's pinned compaction base — ciphertext (#681).
+      description: |
+        Returns the snapshot a compaction named and pinned as the space's
+        base: the only recoverable copy of whatever was compacted away. A
+        device whose first-choice snapshot fails to verify starts from this
+        one instead. 404 when nothing was ever compacted against a pin, in
+        which case the whole change log is still held.
+      parameters: [{ $ref: "#/components/parameters/id" }]
+      responses:
+        "200":
+          description: The pinned base.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/EncryptedSnapshot" }
@@ -1738,11 +1767,18 @@ paths:
     post:
       tags: [personal-state]
       operationId: compactSpace
-      summary: Drop the changes the latest snapshot subsumes and every replica holds. Requires `admin`.
+      summary: Pin a snapshot as the compaction base and drop what every Full Peer confirmed. Requires `admin`.
       description: |
-        Compacts the change log: drops changes the latest snapshot subsumes and
-        that lie within the acknowledged frontier (the frontier every trusted Full
-        Peer holds), so a change a partitioned peer still needs survives (§44).
+        Compacts the change log against the named snapshot (#681). The
+        snapshot is pinned as the space's compaction base, which a cold start
+        prefers and every trusted Full Peer receives. A change is dropped
+        only if that snapshot subsumes it AND every trusted Full Peer has a
+        durable acknowledgement, recorded by this node's audited reconcile,
+        that names this base and covers the change. While any peer lacks one,
+        nothing is dropped and the peers are listed in `waiting_for`: run it
+        again after the next audited reconcile (`POST
+        /api/v1/state/replicate` audits). A node with no trusted Full Peers
+        waits for no one. A caller-supplied `frontier` is refused.
       parameters: [{ $ref: "#/components/parameters/id" }]
       requestBody:
         required: true
@@ -1750,27 +1786,36 @@ paths:
           application/json:
             schema:
               type: object
-              required: [frontier]
+              required: [snapshot_id]
               additionalProperties: false
               properties:
-                frontier:
-                  type: array
-                  items: { type: string }
-                  description: The acknowledged causal frontier every replica holds.
+                snapshot_id:
+                  type: string
+                  description: The snapshot to compact against and pin as the base.
       responses:
         "200":
-          description: How many changes were compacted.
+          description: What the compaction did.
           content:
             application/json:
               schema:
                 type: object
-                required: [dropped]
+                required: [base, pinned, dropped, waiting_for]
                 properties:
+                  base: { type: string, description: The pinned base's snapshot id. }
+                  pinned: { type: boolean, description: Whether this call moved the base. }
                   dropped: { type: integer }
+                  waiting_for:
+                    type: array
+                    items: { type: string }
+                    description: Trusted Full Peers whose acknowledgement does not yet name this base.
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            The snapshot does not provably cover the space's current base
+            (code `base_not_covering`); compact against a newer snapshot.
 
   /api/v1/state/replicate:
     post:
@@ -6937,7 +6982,10 @@ paths:
         is missing beneath them, never a full-log replay (the resumable sync a
         phone needs, §46). A head is an opaque change id; nothing here is
         decrypted (Invariant 6). This is a SEPARATE protocol from CAS sync (§44)
-        that shares this listener and its mTLS authentication.
+        that shares this listener and its mTLS authentication. Once a
+        compaction base is pinned, its frontier is offered with the heads: the
+        peer holds that history as the base rather than as rows, and a sibling
+        must not resend it (#682).
       security:
         - peerCertificate: []
       responses:
@@ -7121,6 +7169,121 @@ paths:
                   snapshot_id: { type: string }
         "400":
           description: The snapshot is malformed or its id does not match its bytes.
+        "404":
+          description: This peer does not hold that encrypted space.
+        "503":
+          description: This node keeps no encrypted personal state to sync.
+
+  /peer/v1/state/{space}/base:
+    parameters:
+      - name: space
+        in: path
+        required: true
+        description: The opaque space id (a UUIDv7).
+        schema: { type: string }
+    post:
+      tags: [peer]
+      operationId: peerStatePinBase
+      summary: Pin a held snapshot as this peer's compaction base (#681, §45).
+      description: |
+        A replicating sibling pins its compaction base here after pushing the
+        base snapshot itself: §45's compaction metadata. Idempotent. The pin
+        is refused when this peer does not hold the snapshot, or when the
+        snapshot does not provably cover the base this peer already pinned
+        (every head of the old base reachable from the new frontier through
+        held changes and the parents they name), so a base only moves forward.
+      security:
+        - peerCertificate: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [snapshot_id]
+              additionalProperties: false
+              properties:
+                snapshot_id: { type: string }
+      responses:
+        "200":
+          description: The base, and whether this call moved it.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [snapshot_id, pinned]
+                properties:
+                  snapshot_id: { type: string }
+                  pinned: { type: boolean }
+        "400":
+          description: The body does not name a snapshot.
+        "404":
+          description: This peer does not hold that encrypted space.
+        "409":
+          description: |
+            `base_not_held`: this peer does not hold the snapshot.
+            `base_not_covering`: it does not cover this peer's base; the
+            sibling is behind and skips the pin.
+        "503":
+          description: This node keeps no encrypted personal state to sync.
+
+  /peer/v1/state/{space}/held:
+    parameters:
+      - name: space
+        in: path
+        required: true
+        description: The opaque space id (a UUIDv7).
+        schema: { type: string }
+    post:
+      tags: [peer]
+      operationId: peerStateHeld
+      summary: Which of these change ids this peer holds, and its pinned base (#681, #682).
+      description: |
+        A replicating sibling's audit. This peer confirms, id by id, which of
+        the offered change ids it holds as rows, in the order asked, and names
+        its pinned compaction base. The sibling counts the base's causal
+        history as held too, resends the rest parents first, and only then
+        records a durable acknowledgement for this peer: never from the heads
+        this peer offers. At most 4096 ids per query; ask in batches.
+      security:
+        - peerCertificate: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [change_ids]
+              additionalProperties: false
+              properties:
+                change_ids:
+                  type: array
+                  maxItems: 4096
+                  items: { type: string }
+      responses:
+        "200":
+          description: The held ids and the pinned base (null for none).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [space_id, held, base]
+                properties:
+                  space_id: { type: string }
+                  held:
+                    type: array
+                    items: { type: string }
+                  base:
+                    type: object
+                    nullable: true
+                    required: [snapshot_id, frontier]
+                    properties:
+                      snapshot_id: { type: string }
+                      frontier:
+                        type: array
+                        items: { type: string }
+        "400":
+          description: The query is malformed or names more than 4096 ids.
         "404":
           description: This peer does not hold that encrypted space.
         "503":

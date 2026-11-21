@@ -673,12 +673,17 @@ YAML
   "${base[@]}" space snapshot "$space_id" --device-dir "$dev" >/dev/null
   "${base[@]}" space put "$space_id" --device-dir "$dev" --item four >/dev/null
 
-  local before after dropped
+  local before after dropped compacted
   before=$("${base[@]}" space changes "$space_id" --json | jq 'length')
   assert_eq "$before" "4" "the log holds all four changes before compaction"
 
-  dropped=$("${base[@]}" space compact "$space_id" --json | jq -r .dropped)
+  # The device verifies the snapshot's authenticated frontier before naming it
+  # (#681); this node has no other Full Peer, so no acknowledgement is awaited.
+  compacted=$("${base[@]}" space compact "$space_id" --device-dir "$dev" --json)
+  dropped=$(jq -r .dropped <<<"$compacted")
   assert_eq "$dropped" "3" "compaction drops the three changes the snapshot subsumes"
+  assert_eq "$(sapi "/api/v1/spaces/$space_id/snapshot/base" | jq -r .snapshot_id)" "$(jq -r .base <<<"$compacted")" \
+    "the snapshot compaction named is pinned as the space's base, for cold start and replication"
 
   after=$("${base[@]}" space changes "$space_id" --json | jq 'length')
   assert_eq "$after" "1" "the log is now bounded — only the tail change remains"

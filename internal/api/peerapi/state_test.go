@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +36,11 @@ type stubState struct {
 
 	snapshots map[string]protocol.EncryptedSnapshot // space id -> latest snapshot
 	gotSnap   *protocol.EncryptedSnapshot           // the last snapshot PutSnapshot accepted
+
+	bases   map[string]protocol.EncryptedSnapshot // space id -> pinned base
+	pinErr  error                                 // what PinBase answers, when set
+	gotPin  string                                // the last snapshot id PinBase accepted
+	askedOf []string                              // the ids the last HeldChanges was asked
 }
 
 func (s *stubState) HeadsFor(_ context.Context, spaceID string) ([]string, error) {
@@ -140,6 +146,43 @@ func (s *stubState) PutSnapshot(_ context.Context, snap protocol.EncryptedSnapsh
 	}
 	s.gotSnap = &snap
 	return nil
+}
+
+func (s *stubState) HeldChanges(_ context.Context, spaceID string, ids []string) ([]string, error) {
+	if s.unknown[spaceID] {
+		return nil, peerapi.ErrNoSuchSpace
+	}
+	s.askedOf = ids
+	have := map[string]bool{}
+	for _, c := range s.changes[spaceID] {
+		have[c.ChangeID] = true
+	}
+	var out []string
+	for _, id := range ids {
+		if have[id] {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+func (s *stubState) Base(_ context.Context, spaceID string) (protocol.EncryptedSnapshot, bool, error) {
+	if s.unknown[spaceID] {
+		return protocol.EncryptedSnapshot{}, false, peerapi.ErrNoSuchSpace
+	}
+	b, ok := s.bases[spaceID]
+	return b, ok, nil
+}
+
+func (s *stubState) PinBase(_ context.Context, spaceID, snapshotID string) (bool, error) {
+	if s.unknown[spaceID] {
+		return false, peerapi.ErrNoSuchSpace
+	}
+	if s.pinErr != nil {
+		return false, s.pinErr
+	}
+	s.gotPin = snapshotID
+	return true, nil
 }
 
 // serveState constructs a peer surface with a State backend, mirroring
@@ -649,5 +692,86 @@ func TestStateKeyEpochRoutes(t *testing.T) {
 	}
 	if st.gotEpoch[space] != 1 {
 		t.Fatalf("the last accepted wrap was at epoch %d, want 1", st.gotEpoch[space])
+	}
+}
+
+// TestStateHeldConfirmsIDsAndNamesTheBase: the audit route answers which offered
+// ids this peer holds, in the order asked, and its pinned base (#681, #682).
+func TestStateHeldConfirmsIDsAndNamesTheBase(t *testing.T) {
+	t.Parallel()
+	const space = "0199aaaa-0000-7000-8000-0000000000a1"
+	a := newPeerNode(t, "peer-a-id", "peer-a")
+	b := newPeerNode(t, "peer-b-id", "peer-b")
+	root := newTrustRoot(a.member(), b.member())
+
+	chA := mustChange(t, space, nil, []byte("OPAQUE-A"))
+	chB := mustChange(t, space, []string{chA.ChangeID}, []byte("OPAQUE-B"))
+	base := mustSnapshot(t, space, []string{chA.ChangeID}, []byte("OPAQUE-BASE"))
+	st := &stubState{
+		changes: map[string][]protocol.EncryptedChange{space: {chA}},
+		bases:   map[string]protocol.EncryptedSnapshot{space: base},
+	}
+	l := serveState(t, a, root, st)
+	client := dialler(t, b, root)
+
+	body := `{"change_ids":["` + chB.ChangeID + `","` + chA.ChangeID + `"]}`
+	status, resp, _, err := peerSend(t, client, http.MethodPost, stateURL(l, space, "/held"), body)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("POST held: status=%d err=%v\n%s", status, err, resp)
+	}
+	var got struct {
+		Held []string           `json:"held"`
+		Base *peerapi.StateBase `json:"base"`
+	}
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Held) != 1 || got.Held[0] != chA.ChangeID {
+		t.Fatalf("held = %v, want only %s", got.Held, chA.ChangeID)
+	}
+	if got.Base == nil || got.Base.SnapshotID != base.SnapshotID || len(got.Base.Frontier) != 1 {
+		t.Fatalf("base = %+v, want %s", got.Base, base.SnapshotID)
+	}
+
+	// An oversized query is refused rather than served.
+	ids := make([]string, peerapi.MaxHeldQuery+1)
+	for i := range ids {
+		ids[i] = "x"
+	}
+	big, _ := json.Marshal(map[string][]string{"change_ids": ids})
+	if status, _, _, _ := peerSend(t, client, http.MethodPost, stateURL(l, space, "/held"), string(big)); status != http.StatusBadRequest {
+		t.Fatalf("an oversized held query: status=%d, want 400", status)
+	}
+}
+
+// TestStatePinBaseRoute: a sibling pins its base; a pin that does not cover this
+// peer's base is a 409 base_not_covering the sibling skips, and one naming a
+// snapshot this peer does not hold is a 409 base_not_held.
+func TestStatePinBaseRoute(t *testing.T) {
+	t.Parallel()
+	const space = "0199aaaa-0000-7000-8000-0000000000b2"
+	a := newPeerNode(t, "peer-a-id", "peer-a")
+	b := newPeerNode(t, "peer-b-id", "peer-b")
+	root := newTrustRoot(a.member(), b.member())
+	st := &stubState{changes: map[string][]protocol.EncryptedChange{space: nil}}
+	l := serveState(t, a, root, st)
+	client := dialler(t, b, root)
+
+	status, resp, _, err := peerSend(t, client, http.MethodPost, stateURL(l, space, "/base"), `{"snapshot_id":"blake3:feed"}`)
+	if err != nil || status != http.StatusOK || st.gotPin != "blake3:feed" {
+		t.Fatalf("POST base: status=%d err=%v pin=%q\n%s", status, err, st.gotPin, resp)
+	}
+	for _, tc := range []struct {
+		err  error
+		code string
+	}{{peerapi.ErrBaseNotCovering, peerapi.CodeBaseNotCovering}, {peerapi.ErrSnapshotNotHeld, peerapi.CodeSnapshotNotHeld}} {
+		st.pinErr = tc.err
+		status, resp, _, _ := peerSend(t, client, http.MethodPost, stateURL(l, space, "/base"), `{"snapshot_id":"blake3:feed"}`)
+		if status != http.StatusConflict || !strings.Contains(resp, tc.code) {
+			t.Fatalf("pin refused with %v: status=%d body=%s, want 409 %s", tc.err, status, resp, tc.code)
+		}
+	}
+	if status, _, _, _ := peerSend(t, client, http.MethodPost, stateURL(l, space, "/base"), `{}`); status != http.StatusBadRequest {
+		t.Fatalf("a pin naming no snapshot: status=%d, want 400", status)
 	}
 }

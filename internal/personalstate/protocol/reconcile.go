@@ -182,3 +182,48 @@ func HaveAll(have []EncryptedChange, wantHeads []string) (bool, string) {
 	}
 	return true, ""
 }
+
+// Covers reports whether a snapshot taken at frontier provably covers one taken
+// at base: every head of base is in frontier's causal history, as far as the
+// holder can tell from have (#681, ADR-0101). The walk starts at frontier and
+// follows the parents of every change it holds. An id it reaches but does not
+// hold still counts as reached. After a compaction, the base's own heads are
+// usually gone from the log, and a surviving change naming one as its parent is
+// exactly the proof that the newer point descends from it.
+//
+// It is keyless and conservative. An ancestry the holder cannot walk is not
+// covered, so a base is replaced, or bypassed for cold start, only on evidence.
+// It says nothing about whether the snapshot's frontier is genuine. A device
+// checks that against the snapshot's authenticated envelope.
+func Covers(have []EncryptedChange, frontier, base []string) bool {
+	byID := make(map[string]EncryptedChange, len(have))
+	for _, c := range have {
+		byID[c.ChangeID] = c
+	}
+	reached := make(map[string]bool, len(have))
+	queue := append([]string(nil), frontier...)
+	for len(queue) > 0 {
+		id := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		if reached[id] {
+			continue
+		}
+		reached[id] = true
+		if c, ok := byID[id]; ok {
+			queue = append(queue, c.Parents...)
+		}
+	}
+	for _, b := range base {
+		if !reached[b] {
+			return false
+		}
+	}
+	return true
+}
+
+// Topological returns changes ordered parents first, ties broken by id, the
+// order [Missing] answers in. A repair that resends what a target lacks pushes
+// in this order, for the reason Missing does (#682).
+func Topological(changes []EncryptedChange) []EncryptedChange {
+	return topological(append([]EncryptedChange(nil), changes...))
+}

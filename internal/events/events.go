@@ -333,6 +333,20 @@ const (
 	// how many changes were compacted for a space, never any content, and is
 	// bounded by the acknowledged frontier so a partitioned peer's change survives.
 	TypeChangesCompacted = "personalstate.change.compacted"
+	// TypeSnapshotPinned is a compaction naming a snapshot and pinning it as the
+	// space's compaction base, or a sibling replicating that pin (#681): the
+	// snapshot a cold-starting device prefers, and §45's compaction metadata. It
+	// names the snapshot ids, old and new, never any content.
+	TypeSnapshotPinned = "personalstate.snapshot.pinned"
+	// TypeStatePeerAcked is this node recording what a trusted Full Peer
+	// confirmed holding of a space, after an audited reconcile (#681): the
+	// durable acknowledgement compaction is proven by. Emitted when the record
+	// changes; it names the peer, the frontier's size and the base, never content.
+	TypeStatePeerAcked = "personalstate.space.peer_acked"
+	// TypeStateRepaired is an audited reconcile resending changes a trusted Full
+	// Peer was missing beneath heads it already offered (#682): a hole the
+	// heads-based push could never see. It names the peer and a count.
+	TypeStateRepaired = "personalstate.space.repaired"
 	// TypeSpaceReplicated is this node having reconciled an encrypted space to a
 	// trusted Full Peer (§37, §45): its metadata, wrapped keys and changes are now
 	// held there too, as ciphertext neither peer can read. Opaque — it names the

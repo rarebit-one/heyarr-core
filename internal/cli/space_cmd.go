@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/rarebit-one/void-which-binds-go/device"
@@ -59,7 +60,7 @@ it.`,
 		newSpaceReadCommand(opts, configPath, &deviceDir),
 		newSpaceSnapshotCommand(opts, configPath, &deviceDir),
 		newSpaceRotateCommand(opts, configPath, &deviceDir),
-		newSpaceCompactCommand(opts, configPath),
+		newSpaceCompactCommand(opts, configPath, &deviceDir),
 		newSpaceRecoverCommand(opts, configPath, &deviceDir),
 		newSpaceExportRecoveryCommand(opts, configPath),
 		newSpaceRewrapCommand(opts, configPath, &deviceDir),
@@ -859,18 +860,33 @@ func recipientIDs(rs []client.Recipient) []string {
 	return ids
 }
 
-// newSpaceCompactCommand builds `heyarr space compact` — drop the changes the
-// latest snapshot subsumes and every replica holds, bounding the log (§44).
-func newSpaceCompactCommand(_ Options, configPath *string) *cobra.Command {
-	var flags clientFlags
+// newSpaceCompactCommand builds `heyarr space compact` — pin the snapshot a cold
+// start would be offered as the compaction base, and drop what it subsumes and
+// every trusted Full Peer confirmed holding (§44, #681).
+func newSpaceCompactCommand(_ Options, configPath, deviceDir *string) *cobra.Command {
+	var (
+		flags      clientFlags
+		unverified bool
+	)
 	cmd := &cobra.Command{
 		Use:   "compact <space-id>",
-		Short: "Drop the changes the latest snapshot subsumes (§44)",
-		Long: `Compact the space's change log: drop the changes the latest snapshot subsumes
-and that every replica already holds, so a long-lived space is not an unbounded
-log. The snapshot is what makes it safe — the dropped changes are recoverable
-from it — and only changes within the acknowledged frontier are ever dropped, so
-a change a partitioned peer still needs survives.`,
+		Short: "Pin the snapshot as the compaction base and drop what every peer confirmed (§44)",
+		Long: `Compact the space's change log against the snapshot a cold-starting device
+would be offered, so a long-lived space is not an unbounded log.
+
+That snapshot is pinned as the space's compaction base: devices prefer it for a
+cold start, and replication carries it to every trusted Full Peer. A change is
+dropped only if the base subsumes it AND every trusted Full Peer has confirmed
+holding both the change and this base, as recorded by this node's audited
+reconcile. Until each has, nothing is dropped and the peers are listed; run it
+again after the next replication (` + "`POST /api/v1/state/replicate`" + ` audits at
+once).
+
+Before compacting, this device opens the space and verifies that the snapshot's
+frontier is sealed inside its ciphertext (#681): a frontier anyone with a write
+token could have rewritten would decide what is dropped. --unverified skips that
+check, for an operator without a key to the space; the peer still compacts only
+what every trusted Full Peer confirmed.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spaceID := args[0]
@@ -882,19 +898,45 @@ a change a partitioned peer still needs survives.`,
 				if !ok {
 					return fmt.Errorf("space %s has no snapshot to compact against — take one first with `space snapshot`", spaceID)
 				}
-				dropped, err := c.Compact(ctx, spaceID, snap.Frontier)
+				if !unverified {
+					cust, err := selectCustody(cmd.Context(), configPath, *deviceDir, cmd.ErrOrStderr())
+					if err != nil {
+						return err
+					}
+					mgr, err := openSpace(ctx, c, cust, spaceID)
+					if err != nil {
+						return err
+					}
+					_, authenticated, err := statesync.OpenSnapshot(mgr, snap)
+					if err != nil {
+						return fmt.Errorf("space compact: snapshot %s does not verify: %w", snap.SnapshotID, err)
+					}
+					if !authenticated {
+						return fmt.Errorf("space compact: snapshot %s predates the authenticated envelope, so its frontier is only a claim (#681); take a new one with `space snapshot`, or pass --unverified", snap.SnapshotID)
+					}
+				}
+				res, err := c.Compact(ctx, spaceID, snap.SnapshotID)
 				if err != nil {
 					return err
 				}
-				if flags.asJSON {
-					return emitJSON(cmd.OutOrStdout(), map[string]any{"dropped": dropped})
+				if res.WaitingFor == nil {
+					res.WaitingFor = []string{}
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "compacted %d change(s) the snapshot subsumes\n", dropped)
+				if flags.asJSON {
+					return emitJSON(cmd.OutOrStdout(), res)
+				}
+				if len(res.WaitingFor) > 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "pinned base %s; dropped nothing yet, waiting for %d trusted Full Peer(s) to confirm it: %s\n"+
+						"run this again after the next replication\n", res.Base, len(res.WaitingFor), strings.Join(res.WaitingFor, ", "))
+					return nil
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "compacted %d change(s) against base %s\n", res.Dropped, res.Base)
 				return nil
 			})
 		},
 	}
 	flags.register(cmd)
+	cmd.Flags().BoolVar(&unverified, "unverified", false, "compact without opening the space to verify the snapshot's frontier")
 	return cmd
 }
 
