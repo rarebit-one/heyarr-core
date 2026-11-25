@@ -14,8 +14,8 @@
 # platform-sensitive directory, and a syscall. line in the patch). The other 23
 # were flakes: the macOS demo overrunning its 300s budget, the macOS acceptance
 # job exiting non-zero after a green verdict, and two timing-sensitive unit
-# tests. What a PR gives up is paid back on the push to main, which still runs
-# everything.
+# tests. What a PR gives up is paid back in the merge queue, which still runs
+# everything before main moves.
 #
 # The rules, in order. The first that matches decides, and says why:
 #   1. the event is not a pull request                          -> full
