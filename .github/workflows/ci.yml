@@ -1,8 +1,11 @@
 name: ci
 
 on:
-  push:
-    branches: [main]
+  # No push trigger for main: main only moves through the merge queue (the
+  # main ruleset has no bypass actors), so every commit on main already has a
+  # full-matrix `ci` verdict from its merge_group run on the same SHA, which is
+  # what release.yml's gate reads. A push run repeated that run on every merge
+  # (rarebit-one/rarebit-sre#592: 73 of 73 push runs since 1 Nov 2026).
   pull_request:
   # The full OS matrix, nightly, even on a day nothing merges — so runner-image
   # drift on macOS or Windows surfaces within a day rather than on the next
@@ -16,8 +19,8 @@ on:
   # merge_group ref too, or a queued PR waits until the queue times it out.
   # This trigger does nothing until a merge queue is enabled on main. `plan`
   # gives these runs the full OS matrix (scripts/ci-matrix.sh rule 1: not a
-  # pull request), the same verdict a push to main gets, so macOS/Windows-only
-  # breakage is caught before main moves. The concurrency group below falls back
+  # pull request), so macOS/Windows-only breakage is caught before main moves.
+  # This is the run that gives every merge its full-matrix verdict. The concurrency group below falls back
   # to github.ref, which is unique per queue entry
   # (refs/heads/gh-readonly-queue/main/pr-<n>-<sha>), and cancel-in-progress is
   # false for this event, so queued runs never cancel one another.
@@ -36,9 +39,9 @@ permissions:
 env:
   GOPRIVATE: github.com/rarebit-one/*
 
-# A new push to a PR supersedes the run in flight, so cancel it. A run on main
-# is never cancelled mid-flight: each merge gets its full-matrix verdict, which
-# is what makes it safe for pull requests to skip the macOS and Windows legs.
+# A new push to a PR supersedes the run in flight, so cancel it. A merge-queue
+# run is never cancelled mid-flight: each merge gets its full-matrix verdict,
+# which is what makes it safe for pull requests to skip the macOS and Windows legs.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -169,7 +172,7 @@ jobs:
   # serves. A unit test cannot make that claim about a whole process tree.
   #
   # On a pull request the macOS legs run only when `plan` says the change is
-  # platform-sensitive; push to main and the nightly run always include them.
+  # platform-sensitive; the merge queue and the nightly run always include them.
   test:
     needs: plan
     runs-on: ${{ matrix.os }}
@@ -401,8 +404,8 @@ jobs:
   # exactly the places it is most likely to differ.
   #
   # On a pull request the macOS leg runs only when `plan` says the change is
-  # platform-sensitive (scripts/, which holds the demo, always is); every push
-  # to main and the nightly run still run both. Over 30 days, 22 macOS-only
+  # platform-sensitive (scripts/, which holds the demo, always is); every
+  # merge-queue run and the nightly run still run both. Over 30 days, 22 macOS-only
   # failures here caught one real bug (bash 3.2 in scripts/acceptance.sh) and
   # were otherwise the demo overrunning its budget on a slower runner.
   acceptance:
