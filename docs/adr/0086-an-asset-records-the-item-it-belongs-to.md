@@ -2,6 +2,10 @@
 
 **Status:** Accepted (2026-09-09)
 **Date:** 2026-09-09
+**Amended:** 2026-11-28. A multi-episode file is also linked to the further
+episodes of the same season its name spells, in `asset_items`; `item_id` keeps
+its meaning. See *Amendment: a multi-episode file belongs to every episode it
+holds (2026-11-28, #939)*.
 **Milestone:** M12 — Followed Sources / The Archive (Phase 5, subtitle provision)
 
 ## Context
@@ -112,3 +116,34 @@ backfilling `item_id` for already-ingested items — worth doing, not now.
   the schema. It stayed undrawn for eleven milestones because nothing asked a
   per-item question of a shared edition; subtitles are the first, and will not be
   the last.
+
+## Amendment: a multi-episode file belongs to every episode it holds (2026-11-28, #939)
+
+`item_id` is one item, so an `S03E08E09` file acquired for E08 satisfied E08 and
+nothing else. E09's want stayed MISSING over bytes the library held, was searched
+for on every beat, and could acquire a second, worse copy.
+
+**Decision.** `asset_items (asset_id, item_id)` records the *further* items an
+asset contains. `assets.item_id` keeps its meaning: it is the one item the
+acquisition asserted, and subtitle binding, copies and peer pull still read only
+that. The acquisition's ingest, single-file and pack alike, links an asset to a
+further item only when:
+
+- the file name spells more than one episode (the release parser,
+  `identification.ParseReleaseSeasonEpisode`);
+- the name agrees with the asserted item, meaning the same season and the
+  asserted episode among those spelled;
+- the further episode is an item the work already enumerated, matched by
+  `item_key`.
+
+Item-scoped primary satisfaction matches either link. An idempotent start-up
+backfill applies the same rule to assets acquired before the table existed.
+
+**Why this is not the filename matching this ADR refused.** The anchor is still
+the asserted item. The name only *extends* an assertion the acquisition made,
+and only when it agrees with it. It never creates a link on its own, and it never
+links an item that was not enumerated. A misnamed file reaches no further than
+the one item its want asserted, which is today's behaviour.
+
+**Revisit if** item-scoped subtitles need the same reach: a caption extracted
+from a two-episode file binds only to the asserted item today.

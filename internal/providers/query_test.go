@@ -41,6 +41,8 @@ func TestQuerySearchTerm(t *testing.T) {
 		{"episode search is zero-padded", Query{Title: "Slow Horses", Season: 12, Episode: 3}, "Slow Horses S12E03"},
 		{"specials episode", Query{Title: "Slow Horses", Season: 0, Episode: 1}, "Slow Horses S00E01"},
 		{"season only is not an episode search", Query{Title: "Slow Horses", Season: 1}, "Slow Horses"},
+		{"season pack search drops the year", Query{Title: "Slow Horses", Year: 2022, Season: 3, SeasonPack: true}, "Slow Horses S03"},
+		{"season pack never widens an episode search", Query{Title: "Slow Horses", Season: 3, Episode: 2, SeasonPack: true}, "Slow Horses S03E02"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

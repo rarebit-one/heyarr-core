@@ -2,6 +2,10 @@
 
 **Status:** Proposed (2026-09-11)
 **Date:** 2026-09-11
+**Amended:** 2026-11-28. An episode want with nothing takeable searches for its
+season, and a release already in flight for a sibling want is not selected
+twice. See *Amendment: the season fallback and one transfer per release
+(2026-11-28, #938)*.
 **Milestone:** M12 — Followed Sources / The Archive (episode-scoped acquisition)
 
 ## Context
@@ -214,3 +218,37 @@ would trade one bug for a worse one. The position is:
   CONTENT_SATISFIED that ADR-0027 and `ingestacquisition.go:166` exist to prevent:
   bytes arriving is not the profile accepting them. Per-item satisfaction stays a
   reconciliation answer over the assets the ingest actually produced.
+
+## Amendment: the season fallback and one transfer per release (2026-11-28, #938)
+
+§1 narrowed every episode search to `"<Title> SxxEyy"`. With pack ingest in place
+(§3.2), that narrowing became the only thing keeping a pack-only episode
+unacquired. An indexer answers an episode query with that episode, so an episode
+that only ever shipped inside a season pack stays MISSING forever.
+
+**Decision.**
+
+- **The season fallback.** When an episode want's own search leaves nothing it
+  could take, it searches once more for `"<Title> Sxx"` (`Query.SeasonPack`).
+  "Nothing it could take" means nothing that passes the blocklist, the gate and
+  the profile; for an upgrade search, nothing better than what is held.
+  - Of the season search's answer, only what could contain the episode is kept:
+    a pack for its season, or a multi-episode file that spells it. These join the
+    same blocklist → gate → scorer pipeline.
+  - An acceptable episode release is still preferred, because the season is only
+    searched when there is none.
+  - Specials (season 0) are not season-searched: a free-text `S00` matches noise.
+- **One transfer per release** (§3.2's "one transfer, many satisfied wants").
+  `RecordSearch` withholds a selection when another primary want of the same work
+  already has that release selected and is not at rest. A release is matched by
+  provider, and by candidate id or title.
+  - The check runs inside `RecordSearch`'s transaction, which takes the write
+    lock up front, so two siblings cannot both select the release.
+  - The withheld want rests with a detail naming its sibling.
+  - The sibling's ingest links the files to every episode they hold, and
+    reconciliation satisfies the withheld want.
+  - A sibling at rest withholds nothing, so a pack whose transfer failed can be
+    tried again by the next episode.
+
+**Revisit if** two sites' wants should share one transfer too. The check reads
+this node's wants only, and fan-out is the cross-site path.

@@ -286,7 +286,8 @@ func (c *Catalog) assetsAndPackagesForWant(
 	// bytes) and self-defeating (acquisition stops for a series after one file).
 	// A season pack still satisfies many episodes: its ingest links one asset
 	// per episode file to that episode's item (§66), so each episode want finds
-	// its own.
+	// its own. A multi-episode file is linked to its further episodes too
+	// (asset_items, #939), so the E09 of an "S03E08E09" file satisfies E09.
 	where := "e.work_id = ?"
 	args := []any{w.workID}
 	switch w.scope {
@@ -294,8 +295,8 @@ func (c *Catalog) assetsAndPackagesForWant(
 		where = "a.edition_id = ?"
 		args = []any{w.editionID}
 	case "item":
-		where = "a.item_id = ?"
-		args = []any{w.itemID}
+		where = "(a.item_id = ? OR a.id IN (SELECT asset_id FROM asset_items WHERE item_id = ?))"
+		args = []any{w.itemID, w.itemID}
 	}
 
 	//nolint:gosec // assembled only from the literal fragments above; every value is bound

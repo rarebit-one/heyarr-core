@@ -451,6 +451,20 @@ func (c *Controller) startBeats(ctx context.Context, db *sqlite.DB, self identit
 	if err != nil {
 		return fmt.Errorf("controller: opening the catalog for the search beat: %w", err)
 	}
+
+	// Multi-episode files acquired before asset_items existed (#939): link each
+	// to the further episodes its name spells, so those episodes' wants are
+	// satisfied by bytes already held instead of being searched for. Idempotent
+	// (zero after the first start) and not fatal: a failure leaves those wants
+	// exactly as they were, and the next start tries again.
+	if n, err := beatCatalog.BackfillFurtherEpisodes(ctx); err != nil {
+		if ctx.Err() == nil {
+			c.log.Warn("could not link multi-episode files to their further episodes", "error", err)
+		}
+	} else if n > 0 {
+		c.log.Info("linked multi-episode files to their further episodes", "links", n)
+	}
+
 	startSearchBeat(ctx, beatCatalog, reconcileQueue, c.log, wallTicker)
 
 	// The follow beat (§55, M12). The search beat's sibling: it asks a per-source

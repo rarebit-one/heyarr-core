@@ -206,6 +206,41 @@ func SearchHandler(
 			return fmt.Errorf("%w: worker: searching for %s: %s", jobs.ErrTransient, payload.DesiredItemID, detail)
 		}
 
+		// The season fallback (#938). An episode that was only ever released
+		// inside a season pack never answers its own "<Title> SxxEyy" search, so
+		// when that search left nothing this want could take, ask once more for
+		// the season and keep what could contain the episode. The pack then goes
+		// through the same blocklist, gate and scorer as everything else, and its
+		// ingest links each file to its own episode (ADR-0093 §3.2).
+		if sc.IsEpisode && sc.Season > 0 {
+			takeable, err := anyTakeable(ctx, cat, payload.DesiredItemID, sc, result.Candidates)
+			if err != nil {
+				return err
+			}
+			if !takeable {
+				seasonQuery := query
+				seasonQuery.Episode, seasonQuery.SeasonPack = 0, true
+				packs, perr := reg.Search(ctx, seasonQuery)
+				switch {
+				case perr != nil:
+					// Not fatal: the episode search's answer stands on its own.
+					log.Warn("a season search could not run",
+						"desired_item_id", payload.DesiredItemID, "error", perr)
+				default:
+					for _, f := range packs.Failures {
+						log.Warn("an indexer could not answer a season search",
+							"provider", f.Provider, "detail", f.Detail,
+							"desired_item_id", payload.DesiredItemID)
+					}
+					var added int
+					result.Candidates, added = mergeContaining(result.Candidates, packs.Candidates, sc.Season, sc.Episode)
+					log.Info("a season search ran for an episode with nothing takeable",
+						"desired_item_id", payload.DesiredItemID,
+						"season", sc.Season, "episode", sc.Episode, "added", added)
+				}
+			}
+		}
+
 		if len(result.Candidates) == 0 {
 			// Nothing found. A modelled edge, recorded so the want does not go
 			// quiet — RecordSearch emits even with nothing to store, which is
@@ -336,6 +371,27 @@ func SearchHandler(
 				return nil
 			}
 			return err
+		}
+		if outcome.CoveredBy != "" {
+			// The release this want would take is already being fetched for
+			// another want of the same work — a season pack, or a two-episode
+			// file — and one transfer serves both (#938). Taking it again would
+			// hand the download client a duplicate. This want rests; when that
+			// transfer is ingested its files are linked to every episode they
+			// hold, and reconciliation satisfies this want from them.
+			detail := fmt.Sprintf("%s is already being fetched for want %s", outcome.CoveredRelease, outcome.CoveredBy)
+			if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
+				acquisition.TransitionCandidatesFound, detail); err != nil {
+				return err
+			}
+			if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
+				acquisition.TransitionRejectAll, detail); err != nil {
+				return err
+			}
+			log.Info("a search left its release to the sibling already fetching it",
+				"desired_item_id", payload.DesiredItemID, "sibling", outcome.CoveredBy,
+				"release", outcome.CoveredRelease)
+			return nil
 		}
 		if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
 			acquisition.TransitionCandidatesFound,
@@ -498,4 +554,53 @@ func noCandidatesDetail(answered, failed int) string {
 	}
 	return fmt.Sprintf("%d of %d indexer(s) answered with nothing; %d could not be reached",
 		answered, answered+failed, failed)
+}
+
+// anyTakeable reports whether an episode search's answer already holds a
+// release this want could take: one that survives the blocklist, the
+// season/episode gate and the profile, and — for an upgrade search — is better
+// than what is held. It is the same pipeline the handler runs below, asked
+// early, so the season fallback (#938) runs exactly when the episode search
+// would otherwise end in nothing.
+func anyTakeable(
+	ctx context.Context, cat SearchStore, desiredItemID string, sc catalog.SearchContext,
+	candidates []acquisition.ReleaseCandidate,
+) (bool, error) {
+	if len(candidates) == 0 {
+		return false, nil
+	}
+	blocked, err := cat.BlockedKeys(ctx, desiredItemID)
+	if err != nil {
+		return false, err
+	}
+	considered, _ := excludeBlocked(candidates, blocked)
+	survivors, _ := gateSeasonEpisode(considered, sc.Season, sc.Episode)
+	_, ok := acquisition.BestOver(acquisition.EvaluateAll(survivors, sc.Profile), sc.Held())
+	return ok, nil
+}
+
+// mergeContaining adds to an episode search's candidates the season search's
+// releases that could contain the wanted episode — a pack for its season, or a
+// multi-episode file that spells it — and drops the rest: the season's other
+// episodes would only be rejected by the gate, and storing a rejection for each
+// of them would bury the one explanation that matters. A release both searches
+// returned is kept once. Returns the merged list and how many were added.
+func mergeContaining(
+	have, more []acquisition.ReleaseCandidate, season, episode int,
+) ([]acquisition.ReleaseCandidate, int) {
+	seen := make(map[string]bool, len(have))
+	for _, c := range have {
+		seen[c.Provider+"\x00"+c.ID] = true
+	}
+	var added int
+	for _, c := range more {
+		key := c.Provider + "\x00" + c.ID
+		if seen[key] || !identification.ParseReleaseSeasonEpisode(c.Title).ContainsEpisode(season, episode) {
+			continue
+		}
+		seen[key] = true
+		have = append(have, c)
+		added++
+	}
+	return have, added
 }
