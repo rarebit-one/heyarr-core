@@ -47,6 +47,12 @@ func (s *Server) registerAcquisitionTools() {
 	})
 
 	s.tools.register(Tool{
+		Name: "reingest_acquisition", Title: "Retry an acquisition import", Scope: auth.ScopeWrite, ReadOnly: false,
+		Description: "After repairing local storage, explicitly retry importing a completed acquisition. This releases its local repair hold and queues an ingest job.",
+		InputSchema: schemaSearchReleases, Handler: s.reingestAcquisition,
+	})
+
+	s.tools.register(Tool{
 		Name:     "acquire_release",
 		Title:    "Acquire a particular release",
 		Scope:    auth.ScopeWrite,

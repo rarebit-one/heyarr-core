@@ -117,7 +117,9 @@ func (a *API) renderCapabilityFor(r *http.Request, assetID string, now time.Time
 		sourceClass string
 	)
 	err = a.reader.QueryRowContext(ctx,
-		`SELECT blob_hash, source_class FROM assets WHERE id = ?`, assetID).Scan(&blobHash, &sourceClass)
+		`SELECT a.blob_hash, a.source_class FROM assets a JOIN editions e ON e.id=a.edition_id
+		 JOIN works w ON w.id=e.work_id WHERE a.id = ?
+		 AND (w.work_key NOT LIKE 'music-recording:%' OR json_extract(w.attributes, '$.metadata_matched_blob')=a.blob_hash)`, assetID).Scan(&blobHash, &sourceClass)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "no asset with that identifier", nil
 	}

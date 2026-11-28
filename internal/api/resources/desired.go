@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -103,7 +104,8 @@ type AcquisitionView struct {
 	// it — rather than being left for a reader of this listing to infer.
 	Placement string `json:"placement"`
 	// Detail is why the last pipeline move happened, when it was a failure.
-	Detail string `json:"detail,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+	RepairHeld bool   `json:"repair_held,omitempty"`
 	// BytesTotal and BytesDone are the download client's progress for a transfer
 	// in flight, refreshed every poll (poll_downloads persists them on the
 	// acquisition row — the fact that "makes 'stuck since Tuesday' visible").
@@ -156,6 +158,8 @@ type WantContentRequest struct {
 // WorkDescriptor names content semantically, whether or not it exists.
 type WorkDescriptor struct {
 	ContentType string `json:"content_type"`
+	Artist      string `json:"artist"`
+	RecordingID string `json:"recording_id"`
 	Title       string `json:"title"`
 	Year        int    `json:"year"`
 	// StoreRef names a game on the store it is owned on, as a tagged source
@@ -190,7 +194,7 @@ type UpdateDesiredRequest struct {
 // nothing about its state rather than hiding the want.
 const desiredColumns = `d.id, d.scope, d.work_id, d.edition_id, d.item_id, d.quality_profile_id,
 	d.monitor, d.reason, d.created_at, d.updated_at, ` + acquisitionSelect +
-	`, acq.bytes_total, acq.bytes_done, fo.origin_site`
+	`, acq.bytes_total, acq.bytes_done, fo.origin_site, (rh.desired_item_id IS NOT NULL)`
 
 // acquisition_state carries the derived §64 axes; the acquisitions row carries
 // the in-flight transfer's byte counts; fan_out_wants names the sibling site
@@ -200,21 +204,25 @@ const desiredColumns = `d.id, d.scope, d.work_id, d.edition_id, d.item_id, d.qua
 const desiredFrom = ` FROM desired_items d
 	LEFT JOIN acquisition_state a ON a.desired_item_id = d.id
 	LEFT JOIN acquisitions acq ON acq.desired_item_id = d.id
-	LEFT JOIN fan_out_wants fo ON fo.desired_item_id = d.id`
+	LEFT JOIN fan_out_wants fo ON fo.desired_item_id = d.id
+	LEFT JOIN acquisition_repair_holds rh ON rh.desired_item_id = d.id`
 
 func scanDesiredItem(row interface{ Scan(...any) error }) (DesiredItem, error) {
 	var d DesiredItem
 	var edition, item, origin sql.NullString
-	var monitor int
+	var monitor, repairHeld int
 	var created, updated string
 	var phase, content, placement, detail sql.NullString
 	var managed, bytesTotal, bytesDone sql.NullInt64
 	if err := row.Scan(&d.ID, &d.Scope, &d.WorkID, &edition, &item, &d.QualityProfileID,
 		&monitor, &d.Reason, &created, &updated,
-		&phase, &managed, &content, &placement, &detail, &bytesTotal, &bytesDone, &origin); err != nil {
+		&phase, &managed, &content, &placement, &detail, &bytesTotal, &bytesDone, &origin, &repairHeld); err != nil {
 		return DesiredItem{}, err
 	}
 	d.Acquisition = scanAcquisitionView(phase, managed, content, placement, detail, bytesTotal, bytesDone)
+	if d.Acquisition != nil {
+		d.Acquisition.RepairHeld = repairHeld != 0
+	}
 	if edition.Valid {
 		d.EditionID = edition.String
 	}
@@ -882,6 +890,18 @@ func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d WorkDescr
 		return "", &badRequest{fmt.Errorf("a year of %d is not a year", d.Year)}
 	}
 
+	artist, recordingID := strings.TrimSpace(d.Artist), strings.TrimSpace(d.RecordingID)
+	if artist != "" || recordingID != "" {
+		if contentType != identification.Music || artist == "" || recordingID == "" {
+			return "", &badRequest{errors.New("artist and recording_id must both be supplied for a music recording")}
+		}
+		parsed, err := uuid.Parse(recordingID)
+		if err != nil || parsed.String() != strings.ToLower(recordingID) {
+			return "", &badRequest{errors.New("recording_id must be a canonical MusicBrainz recording UUID")}
+		}
+		recordingID = parsed.String()
+	}
+
 	// platform is checked before anything is looked up, so a request is refused
 	// or accepted on its own fields — never let through because a store_ref
 	// happened to match an existing Work first.
@@ -927,11 +947,26 @@ func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d WorkDescr
 	if contentType == identification.ROM {
 		key, sortTitle = romKey, romSort
 	}
+	if recordingID != "" {
+		key = "music-recording:" + recordingID
+	}
 	err = tx.QueryRowContext(ctx,
 		`SELECT id FROM works WHERE content_type = ? AND work_key = ?`,
 		contentType, key).Scan(&id)
 	switch {
 	case err == nil:
+		if recordingID != "" {
+			var existingTitle, existingAttrs string
+			if err := tx.QueryRowContext(ctx, `SELECT title, attributes FROM works WHERE id = ?`, id).Scan(&existingTitle, &existingAttrs); err != nil {
+				return "", err
+			}
+			var existing struct {
+				Artist string `json:"artist"`
+			}
+			if json.Unmarshal([]byte(existingAttrs), &existing) != nil || !strings.EqualFold(strings.TrimSpace(existing.Artist), artist) || !strings.EqualFold(identification.DisplayTitle(contentType, existingTitle), identification.DisplayTitle(contentType, title)) {
+				return "", &badRequest{errors.New("recording_id already exists with a different title or artist")}
+			}
+		}
 		if err := refuseSecondStoreID(ctx, tx, id, storeSource, storeID); err != nil {
 			return "", err
 		}
@@ -946,11 +981,16 @@ func (a *API) resolveWorkDescriptor(ctx context.Context, tx *sql.Tx, d WorkDescr
 	if d.Year > 0 {
 		year = d.Year
 	}
+	attrs := "{}"
+	if recordingID != "" {
+		encoded, _ := json.Marshal(map[string]string{"artist": artist, "recording_id": recordingID})
+		attrs = string(encoded)
+	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO works (id, content_type, work_key, title, sort_title, year,
 			attributes, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)`,
-		id, contentType, key, identification.DisplayTitle(contentType, title), sortTitle, year, now, now)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, contentType, key, identification.DisplayTitle(contentType, title), sortTitle, year, attrs, now, now)
 	if err != nil {
 		return "", err
 	}

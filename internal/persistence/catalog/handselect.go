@@ -82,6 +82,10 @@ func (c *Catalog) SelectByHand(
 		pending []events.Event
 	)
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		if err := requireNoRepairHoldTx(ctx, tx, desiredItemID); err != nil {
+			return err
+		}
+
 		before, err := acquisitionInTx(ctx, tx, desiredItemID)
 		if err != nil {
 			return err

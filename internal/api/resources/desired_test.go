@@ -635,3 +635,54 @@ func TestListFiltersItemScopedWants(t *testing.T) {
 		t.Errorf("scope=item = %v, want exactly di-1 and di-2", ids)
 	}
 }
+
+func TestRecordingWantRequiresStructuredIdentityAndDoesNotCollide(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	for _, body := range []string{
+		`{"work":{"content_type":"music","title":"Jump","artist":"Van Halen"},"quality_profile":"living-room"}`,
+		`{"work":{"content_type":"music","title":"Jump","artist":"Van Halen","recording_id":"invalid"},"quality_profile":"living-room"}`,
+		`{"work":{"content_type":"movie","title":"Jump","artist":"Van Halen","recording_id":"11111111-1111-4111-8111-111111111111"},"quality_profile":"living-room"}`,
+	} {
+		resp := postDesired(t, h, body)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("bad identity status %d: %s", resp.StatusCode, h.body(resp))
+		}
+	}
+	var ids []string
+	for _, recording := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"} {
+		body := fmt.Sprintf(`{"work":{"content_type":"music","title":"Jump","artist":"Van Halen","recording_id":%q},"quality_profile":"living-room"}`, recording)
+		resp := postDesired(t, h, body)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("status %d: %s", resp.StatusCode, h.body(resp))
+		}
+		ids = append(ids, decodeDesired(t, h, resp)["work_id"].(string))
+	}
+	conflict := postDesired(t, h, `{"work":{"content_type":"music","title":"Jump","artist":"Someone Else","recording_id":"11111111-1111-4111-8111-111111111111"},"quality_profile":"archival"}`)
+	if conflict.StatusCode != http.StatusBadRequest {
+		t.Fatalf("conflicting identity status %d: %s", conflict.StatusCode, h.body(conflict))
+	}
+	if ids[0] == ids[1] {
+		t.Fatal("distinct recording IDs must not collide")
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM works WHERE id = ? AND work_key = ? AND json_extract(attributes,'$.artist') = ?`, ids[0], "music-recording:11111111-1111-4111-8111-111111111111", "Van Halen"); n != 1 {
+		t.Fatal("structured identity was not stored")
+	}
+}
+
+func TestRecordingWantReusesPunctuatedTitle(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	var ids []string
+	for _, profile := range []string{"living-room", "archival"} {
+		body := fmt.Sprintf(`{"work":{"content_type":"music","title":"What's Love Got to Do with It","artist":"Tina Turner","recording_id":"33333333-3333-4333-8333-333333333333"},"quality_profile":%q}`, profile)
+		resp := postDesired(t, h, body)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("status %d: %s", resp.StatusCode, h.body(resp))
+		}
+		ids = append(ids, decodeDesired(t, h, resp)["work_id"].(string))
+	}
+	if ids[0] != ids[1] {
+		t.Fatalf("same recording produced different works: %v", ids)
+	}
+}

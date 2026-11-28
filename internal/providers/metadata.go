@@ -151,3 +151,34 @@ type DiscoverySearcher interface {
 	// "nothing matched".
 	Discover(ctx context.Context, query string) ([]DiscoveryCandidate, error)
 }
+
+// RecordingCandidate is catalog metadata, never proof of held audio identity.
+type RecordingCandidate struct {
+	ID             string             `json:"recording_id"`
+	Title          string             `json:"title"`
+	Disambiguation string             `json:"disambiguation,omitempty"`
+	DurationMS     int64              `json:"duration_ms,omitempty"`
+	Score          int                `json:"score,omitempty"`
+	Artists        []RecordingArtist  `json:"artists,omitempty"`
+	Releases       []RecordingRelease `json:"releases,omitempty"`
+}
+
+// RecordingArtist is one credited artist returned by a recording search.
+type RecordingArtist struct {
+	ID         string `json:"id,omitempty"`
+	Name       string `json:"name"`
+	JoinPhrase string `json:"join_phrase,omitempty"`
+}
+
+// RecordingRelease is a release associated with a recording search result.
+type RecordingRelease struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Date  string `json:"date,omitempty"`
+}
+
+// RecordingSearcher resolves a structured artist and title to recordings.
+type RecordingSearcher interface {
+	Provider
+	SearchRecordings(ctx context.Context, artist, title string) ([]RecordingCandidate, error)
+}

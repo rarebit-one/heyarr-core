@@ -402,3 +402,55 @@ func repeat(s string, n int) string {
 	}
 	return string(out)
 }
+
+func TestRecordingWantDoesNotAcceptUnverifiedLinkedAsset(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	h.exec(t, `UPDATE works SET content_type='music', work_key='music-recording:11111111-1111-4111-8111-111111111111', attributes='{"artist":"Van Halen"}' WHERE id='w1'`)
+	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	h.setProfile(t, gate1080)
+	h.seedSatisfying(t, "blake3:"+repeat("a", 64), 1080, "web-dl")
+	got, err := h.cat.ReconcileDesired(ctx, h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content.Satisfaction == acquisition.SatisfactionSatisfied {
+		t.Fatal("linked asset without recording verification must not satisfy")
+	}
+}
+
+func TestRecordingWantOnlyAcceptsMetadataMatchedCurrentBlob(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	h.exec(t, `UPDATE works SET content_type='music', work_key='music-recording:11111111-1111-4111-8111-111111111111', attributes='{"artist":"Van Halen"}' WHERE id='w1'`)
+	if _, err := h.cat.StartAcquisition(ctx, h.want); err != nil {
+		t.Fatal(err)
+	}
+	h.setProfile(t, gate1080)
+	hash := "blake3:" + repeat("a", 64)
+	h.seedSatisfying(t, hash, 1080, "web-dl")
+	if err := h.cat.RecordMusicMetadataMatch(ctx, "w1", "a-"+hash, hash); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.cat.ReconcileDesired(ctx, h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content.Satisfaction != acquisition.SatisfactionSatisfied {
+		t.Fatalf("matched bytes did not satisfy: %+v", got.Content)
+	}
+	other := "blake3:" + repeat("b", 64)
+	h.exec(t, `INSERT INTO blobs (hash,size,first_seen_at) VALUES (?,1,?)`, other, stamp)
+	h.exec(t, `UPDATE assets SET blob_hash=? WHERE id=?`, other, "a-"+hash)
+	got, err = h.cat.ReconcileDesired(ctx, h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content.Satisfaction == acquisition.SatisfactionSatisfied {
+		t.Fatal("changed bytes retained old match")
+	}
+}

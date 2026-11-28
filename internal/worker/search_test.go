@@ -714,3 +714,26 @@ func TestAROMSearchPrefersTheUSARelease(t *testing.T) {
 		t.Errorf("selected %q, want the USA release", sel.CandidateID)
 	}
 }
+
+func TestRecordingSearchDoesNotSelectUnverifiedRelease(t *testing.T) {
+	t.Parallel()
+	h := newSearchHarness(t)
+	h.exec(t, `UPDATE works SET content_type='music', work_key='music-recording:11111111-1111-4111-8111-111111111111', title='Jump', attributes='{"artist":"Van Halen","recording_id":"11111111-1111-4111-8111-111111111111"}' WHERE id='w1'`)
+	h.fake.Offer("Jump", offer("unverified", 2160, "hevc"))
+	if err := h.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.fake.LastQuery().SearchTerm(); got != "Van Halen Jump" {
+		t.Fatalf("search term = %q", got)
+	}
+	if got := h.state(t).Name(); got == "SELECTED" || got == "FULLY_SATISFIED" {
+		t.Fatalf("unverified recording was accepted: %s", got)
+	}
+	var n int
+	if err := h.db.Reader().QueryRow(`SELECT COUNT(*) FROM release_candidates WHERE desired_item_id = ?`, h.want).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected the artist search to return one reviewable candidate, got %d", n)
+	}
+}

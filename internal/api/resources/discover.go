@@ -41,6 +41,8 @@ import (
 // errNoDiscovery is the refusal when this node has no provider that can look
 // content up. It is neither the caller's fault nor a failure — there is simply
 // nothing configured to answer — so the route renders it 503, not 400 or 500.
+var errNoRecordingDiscovery = errors.New("no recording discovery provider is configured — configure MusicBrainz")
+
 var errNoDiscovery = errors.New(
 	"no metadata provider is configured that can search for new content — " +
 		"configure a TVDB provider (ADR-0058) to enable discovery")
@@ -48,7 +50,8 @@ var errNoDiscovery = errors.New(
 // DiscoverRequest is the intent behind POST /discover: find candidate works by
 // free text, including ones the library does not hold.
 type DiscoverRequest struct {
-	Query string `json:"query"`
+	Query  string `json:"query"`
+	Artist string `json:"artist,omitempty"`
 }
 
 // DiscoveryResult is one candidate a discovery search returned — enough to show
@@ -80,7 +83,13 @@ type DiscoveryResult struct {
 	ExternalID string `json:"external_id,omitempty"`
 	// Overview is a short human description when the service supplied one, so a
 	// person choosing between two same-named series has something to choose on.
-	Overview string `json:"overview,omitempty"`
+	Overview       string                       `json:"overview,omitempty"`
+	RecordingID    string                       `json:"recording_id,omitempty"`
+	Artists        []providers.RecordingArtist  `json:"artists,omitempty"`
+	Releases       []providers.RecordingRelease `json:"releases,omitempty"`
+	Disambiguation string                       `json:"disambiguation,omitempty"`
+	DurationMS     int64                        `json:"duration_ms,omitempty"`
+	Score          int                          `json:"score,omitempty"`
 }
 
 // Discover runs a live metadata-provider search for candidate works (#451).
@@ -102,6 +111,9 @@ func (a *API) Discover(ctx context.Context, req DiscoverRequest) ([]DiscoveryRes
 		return nil, &badRequest{errors.New("give a query to discover on")}
 	}
 
+	if artist := strings.TrimSpace(req.Artist); artist != "" {
+		return a.discoverRecordings(ctx, artist, query)
+	}
 	searchers := a.providers.DiscoverySearchers()
 	if len(searchers) == 0 {
 		return nil, errNoDiscovery
@@ -145,6 +157,43 @@ func (a *API) Discover(ctx context.Context, req DiscoverRequest) ([]DiscoveryRes
 	return out, nil
 }
 
+// discoverRecordings performs a structured lookup using recording-aware enrich
+// providers. It does not mix album and recording identities in the results.
+func (a *API) discoverRecordings(ctx context.Context, artist, title string) ([]DiscoveryResult, error) {
+	out := []DiscoveryResult{}
+	var searched, answered bool
+	var lastErr error
+	seen := map[string]bool{}
+	for _, p := range a.providers.EnrichProviders() {
+		searcher, ok := p.(providers.RecordingSearcher)
+		if !ok {
+			continue
+		}
+		searched = true
+		candidates, err := searcher.SearchRecordings(ctx, artist, title)
+		if err != nil {
+			lastErr = err
+			a.log.Warn("a recording discovery provider failed", "provider", p.Name(), "error", err)
+			continue
+		}
+		answered = true
+		for _, c := range candidates {
+			if seen[c.ID] {
+				continue
+			}
+			seen[c.ID] = true
+			out = append(out, DiscoveryResult{Title: c.Title, Type: "music", Source: "musicbrainz", ExternalID: c.ID, RecordingID: c.ID, Artists: c.Artists, Releases: c.Releases, Disambiguation: c.Disambiguation, DurationMS: c.DurationMS, Score: c.Score})
+		}
+	}
+	if !searched {
+		return nil, errNoRecordingDiscovery
+	}
+	if !answered {
+		return nil, lastErr
+	}
+	return out, nil
+}
+
 // discoveryResultFor projects a neutral candidate onto the wire shape. The TVDB
 // id is surfaced as tvdb_id only for a tv_series candidate, matching how
 // WorkSummary and follow_source spell that identity.
@@ -177,6 +226,8 @@ func DiscoverClientFault(err error) (string, bool) {
 		return bad.err.Error(), true
 	case errors.Is(err, errNoDiscovery):
 		return errNoDiscovery.Error(), true
+	case errors.Is(err, errNoRecordingDiscovery):
+		return errNoRecordingDiscovery.Error(), true
 	}
 	return "", false
 }
@@ -193,8 +244,8 @@ func (a *API) discoverRoute(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.As(err, &bad):
 			httpapi.Fail(w, r, problem.BadRequest(bad.err.Error()))
-		case errors.Is(err, errNoDiscovery):
-			httpapi.Fail(w, r, problem.ServiceUnavailable(errNoDiscovery.Error()))
+		case errors.Is(err, errNoDiscovery), errors.Is(err, errNoRecordingDiscovery):
+			httpapi.Fail(w, r, problem.ServiceUnavailable(err.Error()))
 		default:
 			a.fail(w, r, "discovery", err)
 		}

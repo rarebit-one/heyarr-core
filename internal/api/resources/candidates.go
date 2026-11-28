@@ -224,6 +224,13 @@ func (a *API) SearchReleases(ctx context.Context, id string) (map[string]string,
 			"this want is for a subtitle, not the content itself — a subtitle is fetched from a " +
 				"subtitle provider (ADR-0085), never searched for on an indexer")}
 	}
+	held, err := a.catalog.AcquisitionRepairHeld(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if held {
+		return nil, &badRequest{errors.New("this request is held for local repair; repair the storage issue, then use reingest to retry")}
+	}
 	job, err := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
 		Type:      acquisition.SearchJobType,
 		Payload:   acquisition.SearchPayload{DesiredItemID: id},
@@ -268,6 +275,20 @@ func (a *API) reingestDesired(w http.ResponseWriter, r *http.Request) {
 // re-locates and re-verifies the bytes itself, so no download-client state is
 // needed. The dedupe key makes it a no-op when an ingest is already live.
 func (a *API) ReingestAcquisition(ctx context.Context, id string) (map[string]string, error) {
+	if _, err := desiredByID(ctx, a.reader, id); err != nil {
+		return nil, err
+	}
+	if _, err := a.catalog.RetryHeldIngest(ctx, id); err != nil {
+		if errors.Is(err, catalog.ErrNoRepairTransfer) {
+			// The user explicitly retried, but no transfer remains to reingest.
+			// Release the hold and run a new search instead.
+			if err := a.catalog.ClearAcquisitionRepairHold(ctx, id); err != nil {
+				return nil, err
+			}
+			return a.SearchReleases(ctx, id)
+		}
+		return nil, err
+	}
 	job, err := a.jobs.Enqueue(ctx, jobs.EnqueueOptions{
 		Type:      acquisition.IngestJobType,
 		Payload:   acquisition.IngestPayload{DesiredItemID: id},
@@ -518,7 +539,7 @@ func (a *API) selectCandidate(w http.ResponseWriter, r *http.Request) {
 				"change the profile if it should be acceptable, rather than overriding it here"))
 		return
 	case errors.Is(err, catalog.ErrTransferInProgress),
-		errors.Is(err, catalog.ErrSearchInFlight), errors.Is(err, catalog.ErrImportInProgress):
+		errors.Is(err, catalog.ErrSearchInFlight), errors.Is(err, catalog.ErrImportInProgress), errors.Is(err, catalog.ErrRepairHold):
 		httpapi.Fail(w, r, problem.Conflict(SelectRefusal(err)))
 		return
 	case err != nil:
@@ -535,6 +556,8 @@ func (a *API) selectCandidate(w http.ResponseWriter, r *http.Request) {
 // it to the person an agent is helping.
 func SelectRefusal(err error) string {
 	switch {
+	case errors.Is(err, catalog.ErrRepairHold):
+		return "this request is held for local storage repair — repair the issue, then explicitly reingest to retry"
 	case errors.Is(err, catalog.ErrTransferInProgress):
 		return err.Error() + " — select with force to replace it anyway (its partial download is discarded)"
 	case errors.Is(err, catalog.ErrSearchInFlight):
@@ -669,6 +692,9 @@ func (a *API) selectURL(w http.ResponseWriter, r *http.Request, id, rawURL strin
 		return
 	case errors.Is(err, acquisition.ErrNotDirectURL), errors.Is(err, ErrNoHTTPClient):
 		httpapi.Fail(w, r, problem.BadRequest(err.Error()))
+		return
+	case errors.Is(err, catalog.ErrRepairHold):
+		httpapi.Fail(w, r, problem.Conflict(SelectRefusal(err)))
 		return
 	case errors.Is(err, ErrNotResting):
 		httpapi.Fail(w, r, problem.Conflict(err.Error()))

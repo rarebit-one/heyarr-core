@@ -252,4 +252,3 @@ that only ever shipped inside a season pack stays MISSING forever.
 
 **Revisit if** two sites' wants should share one transfer too. The check reads
 this node's wants only, and fan-out is the cross-site path.
-

@@ -293,12 +293,16 @@ func (c *Catalog) CorrectWorkIdentity(
 	}
 
 	return c.db.InTx(ctx, func(tx *sql.Tx) error {
-		var contentType, title, attrsJSON string
+		var contentType, title, attrsJSON, workKey string
 		var year sql.NullInt64
 		if err := tx.QueryRowContext(ctx,
-			`SELECT content_type, title, year, attributes FROM works WHERE id = ?`, workID).
-			Scan(&contentType, &title, &year, &attrsJSON); err != nil {
+			`SELECT content_type, title, year, attributes, work_key FROM works WHERE id = ?`, workID).
+			Scan(&contentType, &title, &year, &attrsJSON, &workKey); err != nil {
 			return fmt.Errorf("catalog: the work to correct is gone: %w", err)
+		}
+
+		if strings.HasPrefix(workKey, "music-recording:") {
+			return nil // album enrichment cannot rename a recording-specific request
 		}
 
 		attrs := map[string]any{}

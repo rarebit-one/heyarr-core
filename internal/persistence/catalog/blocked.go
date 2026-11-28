@@ -82,6 +82,13 @@ func (c *Catalog) BlockRelease(ctx context.Context, b BlockedRelease) (bool, err
 		created bool
 	)
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		var held int
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM acquisition_repair_holds WHERE desired_item_id=?)`, b.DesiredItemID).Scan(&held); err != nil {
+			return err
+		}
+		if held != 0 {
+			return ErrRepairHold
+		}
 		var err error
 		ev, created, err = c.blockReleaseTx(ctx, tx, b)
 		return err
@@ -98,6 +105,9 @@ func (c *Catalog) BlockRelease(ctx context.Context, b BlockedRelease) (bool, err
 // blockReleaseTx is BlockRelease inside a caller's transaction. The event is
 // returned for the caller to publish once the transaction commits.
 func (c *Catalog) blockReleaseTx(ctx context.Context, tx *sql.Tx, b BlockedRelease) (events.Event, bool, error) {
+	if err := requireNoRepairHoldTx(ctx, tx, b.DesiredItemID); err != nil {
+		return events.Event{}, false, err
+	}
 	if b.Reason == "" {
 		b.Reason = BlockVerificationFailed
 	}
@@ -159,6 +169,10 @@ func (c *Catalog) BlockTransferRelease(
 		created bool
 	)
 	err = c.db.InTx(ctx, func(tx *sql.Tx) error {
+		if err := requireNoRepairHoldTx(ctx, tx, desiredItemID); err != nil {
+			return err
+		}
+
 		var phase string
 		switch err := tx.QueryRowContext(ctx,
 			`SELECT phase FROM acquisition_state WHERE desired_item_id = ?`, desiredItemID,

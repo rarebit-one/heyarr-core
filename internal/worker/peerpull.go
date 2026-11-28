@@ -289,6 +289,9 @@ func (p PeerPull) publish(ctx context.Context, tokens []string, selfKey string, 
 		return nil
 	}
 	for _, c := range cands {
+		if strings.HasPrefix(c.WorkKey, "music-recording:") {
+			continue // old peers cannot enforce recording evidence
+		}
 		target := catalogop.Target{ContentType: c.ContentType, WorkKey: c.WorkKey}
 		if view.IsTombstoned(target) || published[catalogop.HoldKey(target, c.BlobHash)] {
 			continue
@@ -427,6 +430,9 @@ func (p PeerPull) apply(ctx context.Context, view catalogop.View, selfKey string
 
 	queued, changed := 0, 0
 	for _, op := range ops {
+		if strings.HasPrefix(op.Target.WorkKey, "music-recording:") {
+			continue // retain pending until peer capability is negotiated
+		}
 		prior, seen := done[op.Hash]
 		if seen && prior.Outcome.Final() {
 			continue

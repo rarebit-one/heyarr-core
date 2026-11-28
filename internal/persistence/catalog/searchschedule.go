@@ -107,6 +107,7 @@ func (c *Catalog) DueSearches(ctx context.Context, now time.Time, limit int) ([]
 		JOIN works w ON w.id = d.work_id
 		`+searchBackoff.leftJoin("d.id")+`
 		WHERE a.phase = 'idle'
+          AND NOT EXISTS (SELECT 1 FROM acquisition_repair_holds rh WHERE rh.desired_item_id=d.id)
 		  AND NOT EXISTS (SELECT 1 FROM fan_out_wants f WHERE f.desired_item_id = d.id)
 		  AND NOT (a.managed = 1 AND a.content = 'unknown' AND a.phase_entered_at >= ?)
 		  AND NOT (a.content <> 'satisfied' AND EXISTS (

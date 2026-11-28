@@ -48,6 +48,7 @@ var schemaSearchContent = obj(map[string]any{
 })
 
 var schemaDiscoverContent = obj(map[string]any{
+	"artist": str("For a song, pass the recording artist with the song title in query to discover MusicBrainz recording IDs and versions."),
 	"query": str("The title to look up. Sent to the metadata provider as free text, " +
 		"so it need not match anything already in the library — that is the point."),
 }, "query")
@@ -69,6 +70,8 @@ var schemaWantContent = obj(map[string]any{
 		"something and later scanning it converge on one work. Give either this or " +
 		"work_id, never both."),
 	"content_type": str("Required with title: movie, series, music, book, document, game, rom."),
+	"artist":       str("For a recording-specific music request, supply its artist together with recording_id."),
+	"recording_id": str("Canonical MusicBrainz recording UUID. Automatic acquisition and satisfaction are disabled until audio verification is supported."),
 	"year": integer("Part of the identity when known. A year inside the title is " +
 		"understood too; an explicit one wins."),
 	"store_ref": str("For a game: the store it is owned on and the store's own name " +

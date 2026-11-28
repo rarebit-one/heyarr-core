@@ -250,7 +250,8 @@ func (h *Handler) albumsWhere(ctx context.Context, where string, args []any, ord
 		                                  ELSE a.filename END, ''))))
 		          FROM editions e
 		          JOIN assets a ON a.edition_id = e.id AND a.blob_hash IS NOT NULL AND a.role = 'primary'
-		         WHERE e.work_id = w.id) AS song_count
+		         WHERE e.work_id = w.id
+		           AND (w.work_key NOT LIKE 'music-recording:%' OR json_extract(w.attributes, '$.metadata_matched_blob') = a.blob_hash)) AS song_count
 		FROM works w
 		WHERE ` + where + `
 		ORDER BY ` + orderBy
@@ -299,10 +300,12 @@ func (h *Handler) songs(ctx context.Context, workID, album, artist string, year 
 		       b.hash, b.size, COALESCE(a.mime, b.mime, ''), COALESCE(a.filename, ''),
 		       p.duration_seconds, p.bitrate_bps
 		FROM editions e
+		JOIN works w ON w.id = e.work_id
 		JOIN assets a ON a.edition_id = e.id AND a.blob_hash IS NOT NULL AND a.role = 'primary'
 		JOIN blobs b ON b.hash = a.blob_hash
 		LEFT JOIN blob_probes p ON p.blob_hash = b.hash
 		WHERE e.work_id = ?
+		  AND (w.work_key NOT LIKE 'music-recording:%' OR json_extract(w.attributes, '$.metadata_matched_blob') = a.blob_hash)
 		ORDER BY a.id`, workID)
 	if err != nil {
 		return nil, err

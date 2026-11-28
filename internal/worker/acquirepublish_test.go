@@ -499,3 +499,15 @@ func TestAPublicReleaseCarriesItsCredentialFreeTrackers(t *testing.T) {
 		t.Fatalf("a private release published trackers: %v", op.Acquire.Trackers)
 	}
 }
+
+func TestRecordingAcquisitionDoesNotPublishToOlderPeers(t *testing.T) {
+	t.Parallel()
+	facts := catalog.AcquireFacts{WorkKey: "music-recording:11111111-1111-4111-8111-111111111111", CandidateID: "good"}
+	pub, ops := newPublisher(t, facts)
+	if err := pub.Publish(context.Background(), "want", "good", providers.Transfer{ID: fakeInfohash}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ops.recorded) != 0 {
+		t.Fatal("recording was published without peer capability")
+	}
+}

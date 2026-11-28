@@ -813,3 +813,83 @@ func TestResultsCarryTextAndStructure(t *testing.T) {
 		t.Error("the text block does not carry the answer")
 	}
 }
+
+func TestWantContentRecordingKeepsStructuredIdentity(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, false)
+	var item struct {
+		ID          string `json:"id"`
+		WorkID      string `json:"work_id"`
+		Acquisition *struct {
+			State string `json:"state"`
+		} `json:"acquisition"`
+	}
+	h.call("", "want_content", `{"title":"Jump","content_type":"music","artist":"Van Halen","recording_id":"11111111-1111-4111-8111-111111111111","quality_profile":"living-room"}`).structured(t, &item)
+	if item.ID == "" || item.WorkID == "" || item.Acquisition == nil || item.Acquisition.State != "MISSING" {
+		t.Fatalf("recording want = %+v", item)
+	}
+}
+
+func TestWantContentRejectsRecordingIdentityWithWorkID(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, false)
+	response := h.call("", "want_content", `{"work_id":"w1","artist":"Van Halen","recording_id":"11111111-1111-4111-8111-111111111111","quality_profile":"living-room"}`)
+	if response.Body.Error == nil || response.Body.Error.Code != -32602 {
+		t.Fatalf("expected invalid params, got %+v", response.Body.Error)
+	}
+}
+
+func TestMissingContentShowsRepairHold(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, false)
+	id := h.wantOne("")
+	h.exec(`INSERT INTO acquisition_repair_holds(desired_item_id,detail,created_at) VALUES(?, 'local repair needed', '2026-01-01T00:00:00Z')`, id)
+	var out struct {
+		Wants []struct {
+			ID           string `json:"desired_item_id"`
+			RepairHeld   bool   `json:"repair_held"`
+			RepairDetail string `json:"repair_detail"`
+		} `json:"wants"`
+	}
+	h.call("", "get_missing_content", "").structured(t, &out)
+	if len(out.Wants) != 1 || !out.Wants[0].RepairHeld || out.Wants[0].RepairDetail != "local repair needed" {
+		t.Fatalf("repair status missing: %+v", out)
+	}
+}
+
+func TestReingestAcquisitionReleasesRepairHold(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, false)
+	id := h.wantOne("")
+	h.exec(`INSERT INTO acquisitions(id,desired_item_id,provider,external_id,created_at,updated_at,last_seen_at) VALUES('transfer-test',?,'client','x','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, id)
+	h.exec(`INSERT INTO acquisition_repair_holds(desired_item_id,detail,created_at) VALUES(?, 'repair needed', '2026-01-01T00:00:00Z')`, id)
+	var out struct {
+		Status string `json:"status"`
+	}
+	h.call("", "reingest_acquisition", `{"desired_item_id":"`+id+`"}`).structured(t, &out)
+	if out.Status != "queued" {
+		t.Fatalf("unexpected result: %+v", out)
+	}
+	var held int
+	var phase string
+	if err := h.db.Reader().QueryRow(`SELECT EXISTS(SELECT 1 FROM acquisition_repair_holds WHERE desired_item_id=?),phase FROM acquisition_state WHERE desired_item_id=?`, id, id).Scan(&held, &phase); err != nil {
+		t.Fatal(err)
+	}
+	if held != 0 || phase != "verifying" {
+		t.Fatalf("hold=%d phase=%s", held, phase)
+	}
+}
+
+func TestAcquireReleaseRefusesRepairHoldWithActionableError(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, false)
+	id := h.wantOne("")
+	h.exec(`INSERT INTO acquisition_repair_holds(desired_item_id,detail,created_at) VALUES(?, 'repair needed', '2026-01-01T00:00:00Z')`, id)
+	resp := h.call("", "acquire_release", `{"desired_item_id":"`+id+`","candidate_id":"candidate"}`)
+	if resp.Body.Error == nil {
+		t.Fatal("expected actionable refusal")
+	}
+	if resp.Body.Error.Code != -32602 || !strings.Contains(resp.Body.Error.Message, "local storage repair") || !strings.Contains(resp.Body.Error.Message, "reingest") {
+		t.Fatalf("unexpected refusal: %+v", resp.Body.Error)
+	}
+}

@@ -183,6 +183,9 @@ func (c *Catalog) advanceAcquisition(
 				return fmt.Errorf("%w: acted on %s, now selected %q", ErrSelectionChanged, selectedCandidate, current)
 			}
 		}
+		if err := requireNoRepairHoldTx(ctx, tx, desiredItemID); err != nil {
+			return err
+		}
 		before, err := acquisitionInTx(ctx, tx, desiredItemID)
 		if err != nil {
 			return err

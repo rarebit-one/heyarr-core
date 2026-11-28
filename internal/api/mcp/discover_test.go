@@ -1,10 +1,15 @@
 package mcp_test
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/musicbrainz"
 )
 
 // discover_content over the real JSON-RPC surface (#451). It shares
@@ -66,5 +71,39 @@ func TestDiscoverContentWithoutAProviderSaysSo(t *testing.T) {
 	}
 	if msg := resp.Body.Error.Message; msg == "" {
 		t.Error("the refusal carries no message")
+	}
+}
+
+func TestDiscoverContentRecording(t *testing.T) {
+	t.Parallel()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/recording/" || !strings.Contains(r.URL.Query().Get("query"), `artist:"Cyndi Lauper"`) {
+			t.Errorf("unexpected upstream query: %s", r.URL.String())
+		}
+		fmt.Fprint(w, `{"recordings":[{"id":"12345678-1234-4234-8234-123456789abc","title":"Time After Time","disambiguation":"live","artist-credit":[{"name":"Cyndi Lauper","artist":{"id":"11111111-1111-4111-8111-111111111111","name":"Cyndi Lauper"}}]}]}`)
+	}))
+	defer upstream.Close()
+	reg := providers.New(nil)
+	mb, err := musicbrainz.New(musicbrainz.Options{Name: "mb", Endpoint: upstream.URL, MinInterval: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(mb); err != nil {
+		t.Fatal(err)
+	}
+	h := newHarnessWith(t, false, reg)
+	var out struct {
+		Count   int `json:"count"`
+		Results []struct {
+			RecordingID    string `json:"recording_id"`
+			Disambiguation string `json:"disambiguation"`
+			Artists        []struct {
+				Name string `json:"name"`
+			} `json:"artists"`
+		} `json:"results"`
+	}
+	h.call("", "discover_content", `{"query":"Time After Time","artist":"Cyndi Lauper"}`).structured(t, &out)
+	if out.Count != 1 || out.Results[0].RecordingID != "12345678-1234-4234-8234-123456789abc" || out.Results[0].Disambiguation != "live" || len(out.Results[0].Artists) != 1 || out.Results[0].Artists[0].Name != "Cyndi Lauper" {
+		t.Fatalf("recording discovery = %+v", out)
 	}
 }

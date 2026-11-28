@@ -659,3 +659,19 @@ func TestTheListingBreaksTiesOnTheEvaluatorsKeyAndNoOther(t *testing.T) {
 		t.Error("the first row is the selected one")
 	}
 }
+
+func TestSearchContextDoesNotTreatArtistNamedRecordingAsRecordingWant(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.exec(t, `UPDATE works SET content_type='music', work_key='music:recording:album', attributes='{"artist":"Recording"}' WHERE id='w1'`)
+	if _, err := h.cat.StartAcquisition(context.Background(), h.want); err != nil {
+		t.Fatal(err)
+	}
+	sc, err := h.cat.SearchContextFor(context.Background(), h.want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.RecordingID != "" {
+		t.Fatalf("ordinary album classified as recording-specific: %+v", sc)
+	}
+}

@@ -77,6 +77,7 @@ var (
 // enriched — there is nothing yet to decorate.
 const enrichHeldWhere = `
 	w.content_type IN ` + enrichContentTypes + `
+	AND w.work_key NOT LIKE 'music-recording:%'
 	AND EXISTS (
 		SELECT 1 FROM editions e JOIN assets a ON a.edition_id = e.id
 		WHERE e.work_id = w.id AND a.source_class = 'managed'
@@ -179,7 +180,7 @@ func (c *Catalog) EnrichContext(ctx context.Context, workID string) (DueEnrichWo
 		           AND `+artworkIsBackdrop+`)
 		FROM works w
 		`+enrichBackoff.leftJoin("w.id")+`
-		WHERE w.id = ? AND w.content_type IN `+enrichContentTypes, workID).
+		WHERE w.id = ? AND w.work_key NOT LIKE 'music-recording:%' AND w.content_type IN `+enrichContentTypes, workID).
 		Scan(&d.ContentType, &d.Title, &d.Year, &d.Artist, &d.Author, &d.Fruitless, &hasPoster, &hasBackdrop)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DueEnrichWork{}, false, nil

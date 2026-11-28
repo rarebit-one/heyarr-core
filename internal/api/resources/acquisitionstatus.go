@@ -25,11 +25,12 @@ type AcquisitionStatusView struct {
 	// selected, queued, downloading, verifying, ingesting).
 	Phase string `json:"phase"`
 	// State is the §64 display name — the phase rendered for a reader.
-	State     string `json:"state"`
-	Managed   bool   `json:"managed"`
-	Content   string `json:"content"`
-	Placement string `json:"placement"`
-	Detail    string `json:"detail,omitempty"`
+	State      string `json:"state"`
+	Managed    bool   `json:"managed"`
+	Content    string `json:"content"`
+	Placement  string `json:"placement"`
+	Detail     string `json:"detail,omitempty"`
+	RepairHeld bool   `json:"repair_held,omitempty"`
 	// Transfer is the download in flight. Absent when nothing is downloading —
 	// a want that is idle, still searching, or already satisfied has none.
 	Transfer *AcquisitionTransfer `json:"transfer,omitempty"`
@@ -237,7 +238,8 @@ func (a *API) AcquisitionStatus(ctx context.Context, id string) (AcquisitionStat
 	}
 	// Resolve the want first, so an unknown id is a clean client fault ("no
 	// desired item with that identifier") rather than an empty status.
-	if _, err := desiredByID(ctx, a.reader, id); err != nil {
+	item, err := desiredByID(ctx, a.reader, id)
+	if err != nil {
 		return AcquisitionStatusView{}, err
 	}
 
@@ -253,6 +255,9 @@ func (a *API) AcquisitionStatus(ctx context.Context, id string) (AcquisitionStat
 		Content:       string(rec.State.Content),
 		Placement:     string(rec.State.Placement),
 		Detail:        rec.Detail,
+	}
+	if item.Acquisition != nil {
+		out.RepairHeld = item.Acquisition.RepairHeld
 	}
 
 	tr, err := a.catalog.AcquisitionFor(ctx, id)

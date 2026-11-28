@@ -162,10 +162,10 @@ func (c *Catalog) RecordSearch(
 
 	var ev events.Event
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
-		// One transfer for one release (#938). Inside the transaction, which
-		// takes the write lock up front (_txlock=immediate), so two sibling
-		// searches finishing together cannot both select the same pack: the
-		// second sees the first's selection here.
+		if err := requireNoRepairHoldTx(ctx, tx, desiredItemID); err != nil {
+			return err
+		}
+		// One transfer per release; resolve sibling coverage under the write lock.
 		if haveBest {
 			sibling, err := siblingFetching(ctx, tx, desiredItemID, best.Candidate)
 			if err != nil {
@@ -175,6 +175,7 @@ func (c *Catalog) RecordSearch(
 				outcome.SelectedCandidateID = ""
 				outcome.CoveredBy, outcome.CoveredRelease = sibling, best.Candidate.Title
 			}
+
 		}
 
 		if _, err := tx.ExecContext(ctx,
@@ -350,6 +351,9 @@ func (c *Catalog) OverrideSelection(
 func (c *Catalog) overrideSelectionTx(
 	ctx context.Context, tx *sql.Tx, desiredItemID, candidateID string,
 ) (chosen Candidate, ev events.Event, err error) {
+	if err := requireNoRepairHoldTx(ctx, tx, desiredItemID); err != nil {
+		return Candidate{}, events.Event{}, err
+	}
 	now := sqlite.FormatTimestamp(c.clock.Now())
 	chosen, err = scanCandidate(tx.QueryRowContext(ctx,
 		`SELECT `+candidateCols+` FROM release_candidates
@@ -441,6 +445,8 @@ type SearchContext struct {
 	Title         string
 	Year          int
 	ContentType   string
+	RecordingID   string
+	Artist        string
 	Profile       policy.Profile
 	State         acquisition.State
 	// Season and Episode target one episode of a series (ADR-0093), read from
@@ -488,19 +494,20 @@ func (c *Catalog) SearchContextFor(ctx context.Context, desiredItemID string) (S
 		itemKey   sql.NullString
 		itemAttrs sql.NullString
 		workKey   string
+		workAttrs string
 	)
 	// LEFT JOIN items so an item-scoped want reads the season/episode it points
 	// at (ADR-0093). The join is null for every other want — a work- or
 	// season-scoped one, or any non-series content type — and then the episode
 	// fields stay absent and the query is exactly what it was.
 	err := c.db.Reader().QueryRowContext(ctx, `
-		SELECT d.id, w.title, w.year, w.content_type, w.work_key, d.quality_profile_id,
+		SELECT d.id, w.title, w.year, w.content_type, w.work_key, w.attributes, d.quality_profile_id,
 		       d.scope, i.item_key, i.attributes
 		FROM desired_items d
 		JOIN works w ON w.id = d.work_id
 		LEFT JOIN items i ON i.id = d.item_id
 		WHERE d.id = ?`, desiredItemID).
-		Scan(&out.DesiredItemID, &out.Title, &year, &out.ContentType, &workKey, &profileID,
+		Scan(&out.DesiredItemID, &out.Title, &year, &out.ContentType, &workKey, &workAttrs, &profileID,
 			&scope, &itemKey, &itemAttrs)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SearchContext{}, fmt.Errorf("catalog: no desired item %s: %w", desiredItemID, err)
@@ -515,6 +522,16 @@ func (c *Catalog) SearchContextFor(ctx context.Context, desiredItemID string) (S
 		if season, episode, ok := episodeTarget(itemKey.String, itemAttrs.String); ok {
 			out.Season, out.Episode, out.IsEpisode = season, episode, true
 		}
+	}
+	if strings.HasPrefix(workKey, "music-recording:") {
+		out.RecordingID = strings.TrimPrefix(workKey, "music-recording:")
+		var attrs struct {
+			Artist string `json:"artist"`
+		}
+		if err := json.Unmarshal([]byte(workAttrs), &attrs); err != nil || strings.TrimSpace(attrs.Artist) == "" {
+			return SearchContext{}, fmt.Errorf("catalog: music recording %s has no valid artist", workKey)
+		}
+		out.Artist = attrs.Artist
 	}
 	if out.ContentType == identification.ROM {
 		// A ROM key always carries a vocabulary platform (DescribeROM and the

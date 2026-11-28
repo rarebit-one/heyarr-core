@@ -36,6 +36,7 @@ var toolArgs = map[string]any{
 	"want_content":             wantContentArgs{},
 	"monitor_content":          monitorContentArgs{},
 	"search_releases":          searchReleasesArgs{},
+	"reingest_acquisition":     searchReleasesArgs{},
 	"acquire_release":          acquireReleaseArgs{},
 	"get_missing_content":      getMissingContentArgs{},
 	"get_upgrade_candidates":   getUpgradeCandidatesArgs{},

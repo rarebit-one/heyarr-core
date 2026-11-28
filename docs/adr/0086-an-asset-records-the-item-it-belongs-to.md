@@ -147,4 +147,3 @@ the one item its want asserted, which is today's behaviour.
 
 **Revisit if** item-scoped subtitles need the same reach: a caption extracted
 from a two-episode file binds only to the asserted item today.
-
