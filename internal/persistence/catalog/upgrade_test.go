@@ -79,7 +79,7 @@ func TestScanFindsAnEligibleWant(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := h.cat.ScanForUpgrades(ctx, 100)
+	got, err := h.cat.ScanForUpgrades(ctx, catalog.SweepCursor{}, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestScanSkipsATerminalWant(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := h.cat.ScanForUpgrades(ctx, 100)
+	got, err := h.cat.ScanForUpgrades(ctx, catalog.SweepCursor{}, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestScanNeverConsidersAnUnmonitoredWant(t *testing.T) {
 
 	// Confirm it IS eligible while monitored, so the assertion below is about
 	// monitoring and not about something else being wrong.
-	if got, err := h.cat.ScanForUpgrades(ctx, 100); err != nil {
+	if got, err := h.cat.ScanForUpgrades(ctx, catalog.SweepCursor{}, 100); err != nil {
 		t.Fatal(err)
 	} else if len(got.Eligible) != 1 {
 		t.Fatalf("setup: expected one eligible want, got %d", len(got.Eligible))
@@ -155,7 +155,7 @@ func TestScanNeverConsidersAnUnmonitoredWant(t *testing.T) {
 
 	h.setMonitor(t, false)
 
-	got, err := h.cat.ScanForUpgrades(ctx, 100)
+	got, err := h.cat.ScanForUpgrades(ctx, catalog.SweepCursor{}, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestScanSkipsAnUnsatisfiedWant(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := h.cat.ScanForUpgrades(ctx, 100)
+	got, err := h.cat.ScanForUpgrades(ctx, catalog.SweepCursor{}, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestAScanWithNothingToSayIsSilent(t *testing.T) {
 	settled := h.eventCount(t)
 
 	for range 5 {
-		if _, err := h.cat.ScanForUpgrades(ctx, 100); err != nil {
+		if _, err := h.cat.ScanForUpgrades(ctx, catalog.SweepCursor{}, 100); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -241,7 +241,7 @@ func TestAScanOverAnEligibleLibraryStillEmitsNothing(t *testing.T) {
 	}
 	settled := h.eventCount(t)
 
-	got, err := h.cat.ScanForUpgrades(ctx, 100)
+	got, err := h.cat.ScanForUpgrades(ctx, catalog.SweepCursor{}, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +437,7 @@ func TestRaisingTheProfileMakesASatisfiedWantIneligible(t *testing.T) {
 	if _, err := h.cat.ReconcileDesired(ctx, h.want); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := h.cat.ScanForUpgrades(ctx, 100); err != nil {
+	if got, err := h.cat.ScanForUpgrades(ctx, catalog.SweepCursor{}, 100); err != nil {
 		t.Fatal(err)
 	} else if len(got.Eligible) != 1 {
 		t.Fatalf("setup: %d eligible", len(got.Eligible))
@@ -450,7 +450,7 @@ func TestRaisingTheProfileMakesASatisfiedWantIneligible(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := h.cat.ScanForUpgrades(ctx, 100)
+	got, err := h.cat.ScanForUpgrades(ctx, catalog.SweepCursor{}, 100)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -431,6 +431,14 @@ stable.
   alternative.
 
 ### Fixed
+- **Reconciliation and the upgrade scan reach every want, not just the oldest
+  5000** (#942). Each sweep read one fixed page, `ORDER BY created_at, id LIMIT
+  5000`, with no cursor, so every pass re-read the same oldest 5000 wants. On a
+  larger library the newest wants were never re-judged: no 5-minute
+  reconciliation and no upgrade eligibility. A scoped upgrade scan for one of
+  them also found nothing. Both sweeps now walk every page with a
+  `(created_at, id)` keyset cursor, so the batch size limits one page, not the
+  whole sweep.
 - **An episode that only exists inside a season pack is acquired** (#938,
   ADR-0093 amendment). An episode want searched only for `"<Title> SxxEyy"`, so
   an episode no one released on its own stayed MISSING forever. The upgrade

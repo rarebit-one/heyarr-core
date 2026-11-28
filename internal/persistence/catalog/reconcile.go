@@ -692,27 +692,37 @@ func (c *Catalog) replicasOf(ctx context.Context, blobHash string) ([]acquisitio
 	return out, rows.Err()
 }
 
-// DesiredItemsToReconcile lists every want, oldest first.
+// SweepCursor is where a paged sweep over desired_items stands: the
+// (created_at, id) of the last want a page returned (#942). The zero value
+// starts at the oldest want. A sweep walks pages in that order until a page
+// comes back short, so a library larger than one page is covered on every pass
+// instead of having its oldest page re-read forever.
+type SweepCursor struct{ CreatedAt, ID string }
+
+// DesiredItemsToReconcile lists one page of wants after the cursor, oldest
+// first, and the cursor that continues after it.
 //
-// The whole library, on every pass. A DesiredItem's satisfaction can change
-// without the want being touched — a profile edit, a deleted asset, a peer
-// going away (§57) — so a sweep that only looked at recently-changed wants
-// would miss exactly the cases reconciliation exists for.
-func (c *Catalog) DesiredItemsToReconcile(ctx context.Context, limit int) ([]string, error) {
-	rows, err := c.db.Reader().QueryContext(ctx,
-		`SELECT id FROM desired_items ORDER BY created_at, id LIMIT ?`, limit)
+// The whole library is swept on every pass, page by page. A DesiredItem's
+// satisfaction can change without the want being touched — a profile edit, a
+// deleted asset, a peer going away (§57) — so a sweep that only looked at
+// recently-changed wants would miss exactly the cases reconciliation exists for.
+func (c *Catalog) DesiredItemsToReconcile(ctx context.Context, after SweepCursor, limit int) ([]string, SweepCursor, error) {
+	rows, err := c.db.Reader().QueryContext(ctx, `
+		SELECT id, created_at FROM desired_items
+		WHERE (created_at, id) > (?, ?)
+		ORDER BY created_at, id LIMIT ?`, after.CreatedAt, after.ID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: listing desired items: %w", err)
+		return nil, after, fmt.Errorf("catalog: listing desired items: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	var out []string
+	next := after
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+		if err := rows.Scan(&next.ID, &next.CreatedAt); err != nil {
+			return nil, after, err
 		}
-		out = append(out, id)
+		out = append(out, next.ID)
 	}
-	return out, rows.Err()
+	return out, next, rows.Err()
 }
