@@ -66,8 +66,18 @@ type SearchOutcome struct {
 	// than a failure.
 	Acceptable int
 	// SelectedCandidateID is the provider's id for the chosen release, empty
-	// when nothing was acceptable.
+	// when nothing was acceptable — or when the best release is already being
+	// fetched for a sibling (CoveredBy).
 	SelectedCandidateID string
+	// CoveredBy is set when the release this want would have selected is
+	// already selected, and in flight, for another want of the same work — a
+	// season pack or a two-episode file several episode wants all choose
+	// (#938). The selection is withheld so the download client is not handed
+	// the same transfer twice; the sibling's ingest links the files to every
+	// episode they hold, and reconciliation then satisfies this want.
+	// CoveredRelease is that release's title, for the want's detail.
+	CoveredBy      string
+	CoveredRelease string
 }
 
 // ErrNoCandidate is returned when a want has no candidate with that id.
@@ -140,7 +150,8 @@ func (c *Catalog) RecordSearch(
 	outcome := SearchOutcome{SearchID: searchID, Found: len(ranked)}
 	// BestOver, not Best: for a satisfied want this is an upgrade search, and
 	// an upgrade must be strictly better than what is held (#229).
-	if best, ok := acquisition.BestOver(ranked, incumbent); ok {
+	best, haveBest := acquisition.BestOver(ranked, incumbent)
+	if haveBest {
 		outcome.SelectedCandidateID = best.Candidate.ID
 	}
 	for _, r := range ranked {
@@ -151,6 +162,21 @@ func (c *Catalog) RecordSearch(
 
 	var ev events.Event
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		// One transfer for one release (#938). Inside the transaction, which
+		// takes the write lock up front (_txlock=immediate), so two sibling
+		// searches finishing together cannot both select the same pack: the
+		// second sees the first's selection here.
+		if haveBest {
+			sibling, err := siblingFetching(ctx, tx, desiredItemID, best.Candidate)
+			if err != nil {
+				return err
+			}
+			if sibling != "" {
+				outcome.SelectedCandidateID = ""
+				outcome.CoveredBy, outcome.CoveredRelease = sibling, best.Candidate.Title
+			}
+		}
+
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM release_candidates WHERE desired_item_id = ?`, desiredItemID); err != nil {
 			return fmt.Errorf("catalog: clearing previous candidates: %w", err)
@@ -203,6 +229,7 @@ func (c *Catalog) RecordSearch(
 				"found":           outcome.Found,
 				"acceptable":      outcome.Acceptable,
 				"selected":        outcome.SelectedCandidateID,
+				"covered_by":      outcome.CoveredBy,
 			})
 		return emitErr
 	})
@@ -211,6 +238,40 @@ func (c *Catalog) RecordSearch(
 	}
 	c.events.Publish(ev)
 	return outcome, nil
+}
+
+// siblingFetching names another primary want of the same work that already has
+// this release selected and is still acquiring it (not at rest), or "" when none
+// has. A release is recognised by its provider and either its candidate id or
+// its title: one torrent offered by two indexers may carry two ids, but it
+// carries one name.
+func siblingFetching(
+	ctx context.Context, tx *sql.Tx, desiredItemID string, c acquisition.ReleaseCandidate,
+) (string, error) {
+	var sibling string
+	err := tx.QueryRowContext(ctx, `
+		SELECT rc.desired_item_id
+		FROM release_candidates rc
+		JOIN desired_items d  ON d.id = rc.desired_item_id
+		JOIN desired_items me ON me.id = ?
+		JOIN acquisition_state s ON s.desired_item_id = rc.desired_item_id
+		WHERE rc.selected = 1
+		  AND rc.desired_item_id <> me.id
+		  AND d.work_id = me.work_id
+		  AND d.aspect = 'primary'
+		  AND rc.provider = ?
+		  AND (rc.candidate_id = ? OR (rc.title <> '' AND rc.title = ?))
+		  AND s.phase <> 'idle'
+		ORDER BY rc.selected_at, rc.desired_item_id
+		LIMIT 1`,
+		desiredItemID, c.Provider, c.ID, c.Title).Scan(&sibling)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("catalog: looking for a sibling fetching %s: %w", c.ID, err)
+	}
+	return sibling, nil
 }
 
 // CandidatesFor lists a want's candidates, best first.
