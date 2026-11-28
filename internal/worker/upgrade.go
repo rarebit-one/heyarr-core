@@ -9,7 +9,7 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
 )
 
-// upgradeScanBatch bounds one sweep, for the same reason reconcileBatch does:
+// upgradeScanBatch bounds one page of the scan, for the same reason reconcileBatch does:
 // the failure mode of a very large library should be "the scan takes several
 // passes" rather than "the scan times out and nothing is ever upgraded".
 const upgradeScanBatch = 5000
@@ -17,7 +17,7 @@ const upgradeScanBatch = 5000
 // UpgradeScanner runs the upgrade scan. A
 // *catalog.Catalog satisfies it; the handler depends on no more than it calls.
 type UpgradeScanner interface {
-	ScanForUpgrades(ctx context.Context, limit int) (catalog.UpgradeScanResult, error)
+	ScanForUpgrades(ctx context.Context, after catalog.SweepCursor, limit int) (catalog.UpgradeScanResult, error)
 }
 
 // UpgradeScanHandler finds the wants that could be improved (§60, M3-06).
@@ -48,9 +48,28 @@ func UpgradeScanHandler(cat UpgradeScanner, log *slog.Logger) HandlerFunc {
 			return err
 		}
 
-		result, err := cat.ScanForUpgrades(ctx, upgradeScanBatch)
-		if err != nil {
-			return err
+		// Every page, not the first one (#942): a fixed first page left every
+		// want past it out of every scan, and a scoped run for such a want
+		// found nothing.
+		var (
+			cursor     catalog.SweepCursor
+			considered int
+			all        []catalog.UpgradeCandidateRow
+		)
+		for {
+			if err := ctx.Err(); err != nil {
+				return nil // the next beat rescans; nothing here is half-written
+			}
+			page, err := cat.ScanForUpgrades(ctx, cursor, upgradeScanBatch)
+			if err != nil {
+				return err
+			}
+			considered += page.Considered
+			all = append(all, page.Eligible...)
+			if page.Considered < upgradeScanBatch {
+				break
+			}
+			cursor = page.Next
 		}
 
 		// Scoped runs report only the want that was asked about. The filter is
@@ -58,10 +77,10 @@ func UpgradeScanHandler(cat UpgradeScanner, log *slog.Logger) HandlerFunc {
 		// scoped form exists for an operator poking at one want, not for a hot
 		// path — and one extra pass over a slice is cheaper than a second
 		// query shape to keep correct.
-		eligible := result.Eligible
+		eligible := all
 		if payload.DesiredItemID != "" {
 			eligible = nil
-			for _, e := range result.Eligible {
+			for _, e := range all {
 				if e.DesiredItemID == payload.DesiredItemID {
 					eligible = append(eligible, e)
 				}
@@ -82,7 +101,7 @@ func UpgradeScanHandler(cat UpgradeScanner, log *slog.Logger) HandlerFunc {
 				"why", e.Verdict.Detail)
 		}
 		log.Info("upgrade scan swept",
-			"monitored", result.Considered, "eligible", len(eligible))
+			"monitored", considered, "eligible", len(eligible))
 		return nil
 	}
 }

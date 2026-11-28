@@ -48,6 +48,9 @@ type UpgradeScanResult struct {
 	// Changed reports whether anything was recorded. A scan over a library
 	// with nothing upgradable changes nothing and emits nothing.
 	Changed bool
+	// Next continues the scan after this page (#942). A page shorter than the
+	// limit was the last one.
+	Next SweepCursor
 }
 
 // ScanForUpgrades finds the wants that could be improved (§60).
@@ -61,17 +64,20 @@ type UpgradeScanResult struct {
 //
 // Idempotent: it reads and concludes, writing nothing unless a want's
 // eligibility actually changed.
-func (c *Catalog) ScanForUpgrades(ctx context.Context, limit int) (UpgradeScanResult, error) {
+//
+// It reads one page of monitored wants after the cursor (#942); the caller walks
+// the pages, so a library larger than one page is scanned whole.
+func (c *Catalog) ScanForUpgrades(ctx context.Context, after SweepCursor, limit int) (UpgradeScanResult, error) {
 	// Monitored wants only, at the QUERY. Filtering in Go would mean reading
 	// every want in the library to discard most of them, and the index on
 	// desired_items(monitor) exists precisely so this does not.
 	rows, err := c.db.Reader().QueryContext(ctx, `
-		SELECT d.id, d.work_id, d.quality_profile_id, a.content, a.managed
+		SELECT d.id, d.created_at, d.work_id, d.quality_profile_id, a.content, a.managed
 		FROM desired_items d
 		JOIN acquisition_state a ON a.desired_item_id = d.id
-		WHERE d.monitor = 1
+		WHERE d.monitor = 1 AND (d.created_at, d.id) > (?, ?)
 		ORDER BY d.created_at, d.id
-		LIMIT ?`, limit)
+		LIMIT ?`, after.CreatedAt, after.ID, limit)
 	if err != nil {
 		return UpgradeScanResult{}, fmt.Errorf("catalog: listing monitored wants: %w", err)
 	}
@@ -82,12 +88,14 @@ func (c *Catalog) ScanForUpgrades(ctx context.Context, limit int) (UpgradeScanRe
 		managed                        bool
 	}
 	var candidates []row
+	next := after
 	for rows.Next() {
 		var r row
 		var managed int
-		if err := rows.Scan(&r.id, &r.workID, &r.profileID, &r.content, &managed); err != nil {
+		if err := rows.Scan(&r.id, &next.CreatedAt, &r.workID, &r.profileID, &r.content, &managed); err != nil {
 			return UpgradeScanResult{}, err
 		}
+		next.ID = r.id
 		r.managed = managed == 1
 		candidates = append(candidates, r)
 	}
@@ -95,7 +103,7 @@ func (c *Catalog) ScanForUpgrades(ctx context.Context, limit int) (UpgradeScanRe
 		return UpgradeScanResult{}, err
 	}
 
-	result := UpgradeScanResult{Considered: len(candidates)}
+	result := UpgradeScanResult{Considered: len(candidates), Next: next}
 	for _, r := range candidates {
 		if err := ctx.Err(); err != nil {
 			return result, nil
