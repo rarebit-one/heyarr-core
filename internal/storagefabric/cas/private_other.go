@@ -9,6 +9,7 @@ import (
 	"github.com/rarebit-one/void-which-binds-go/hashing"
 )
 
+// CheckPrivateBlob fails closed when this platform cannot prove blob privacy.
 func (s *FS) CheckPrivateBlob(context.Context, hashing.Hash) error {
 	return errors.New("cas: private blob proof is unsupported on this platform")
 }
