@@ -81,6 +81,7 @@ type IngestAcquisitionStore interface {
 	SelectedCandidate(ctx context.Context, desiredItemID string) (catalog.Candidate, error)
 	RecordVerifiedStoreEditions(ctx context.Context, editionIDs []string, pkg catalog.VerifiedStorePackage) error
 	SetAssetItem(ctx context.Context, assetID, itemID string) error
+	LinkFurtherEpisodes(ctx context.Context, assetID, itemID, fileName string) (int, error)
 	WorkForDesired(ctx context.Context, desiredItemID string) (catalog.DesiredWork, error)
 }
 
@@ -672,6 +673,13 @@ func ingestArtifacts(
 					return nil, 0, fmt.Errorf("linking the ingested asset to its item: %w", err)
 				}
 				linked++
+				// A multi-episode file ("S03E08E09") also holds the further
+				// episodes its name spells (#939).
+				n, err := cat.LinkFurtherEpisodes(ctx, res.AssetID, itemID, a.RelPath)
+				if err != nil {
+					return nil, 0, fmt.Errorf("linking the ingested asset to its further episodes: %w", err)
+				}
+				linked += n
 			}
 		}
 		return []ingest.Result{res}, linked, nil
@@ -722,6 +730,12 @@ func ingestArtifacts(
 			return nil, 0, fmt.Errorf("linking pack file %s to item %s: %w", a.RelPath, itemID, err)
 		}
 		linked++
+		// A pack file that holds two episodes is linked to both (#939).
+		n, err := cat.LinkFurtherEpisodes(ctx, res.AssetID, itemID, a.RelPath)
+		if err != nil {
+			return nil, 0, fmt.Errorf("linking pack file %s to its further episodes: %w", a.RelPath, err)
+		}
+		linked += n
 	}
 	return results, linked, nil
 }

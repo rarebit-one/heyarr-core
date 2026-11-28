@@ -39,6 +39,10 @@ type Fake struct {
 	// than a single list so one fake can stand in for a whole library's worth
 	// of searches, which is what the demo needs.
 	candidates map[string][]acquisition.ReleaseCandidate
+	// seasons answers a season search (#938), keyed by title and season. A
+	// season with no offer answers nothing, the way an indexer would.
+	seasons map[string][]acquisition.ReleaseCandidate
+	queries []Query
 	// searches counts calls, so a test can assert routing actually routed
 	// rather than inferring it from a result that might have come from
 	// anywhere.
@@ -86,6 +90,7 @@ func NewFake(name string, caps ...Capability) *Fake {
 		name:       name,
 		caps:       sortCapabilities(caps),
 		candidates: map[string][]acquisition.ReleaseCandidate{},
+		seasons:    map[string][]acquisition.ReleaseCandidate{},
 		feeds:      map[string][]followed.FeedItem{},
 		discovery:  map[string][]DiscoveryCandidate{},
 		now:        func() time.Time { return time.Now().UTC() },
@@ -110,6 +115,23 @@ func (f *Fake) Offer(title string, candidates ...acquisition.ReleaseCandidate) *
 	defer f.mu.Unlock()
 	f.candidates[normaliseTitle(title)] = candidates
 	return f
+}
+
+// OfferSeason makes a set of candidates the answer to a season search for a
+// title (#938). An episode or title search never sees them, so a test can model
+// an indexer that holds a season only as a pack.
+func (f *Fake) OfferSeason(title string, season int, candidates ...acquisition.ReleaseCandidate) *Fake {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seasons[normaliseTitle(title)+"\x00"+strconv.Itoa(season)] = candidates
+	return f
+}
+
+// Queries is every query Search was handed, in order.
+func (f *Fake) Queries() []Query {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Query(nil), f.queries...)
 }
 
 // FailWith makes every subsequent Search fail, so the partial-answer path is
@@ -141,10 +163,14 @@ func (f *Fake) Search(_ context.Context, q Query) ([]acquisition.ReleaseCandidat
 	defer f.mu.Unlock()
 	f.searches++
 	f.lastQuery = q
+	f.queries = append(f.queries, q)
 	if f.failWith != nil {
 		return nil, f.failWith
 	}
 	found := f.candidates[normaliseTitle(q.Title)]
+	if q.IsSeason() {
+		found = f.seasons[normaliseTitle(q.Title)+"\x00"+strconv.Itoa(q.Season)]
+	}
 	out := make([]acquisition.ReleaseCandidate, 0, len(found))
 	for _, c := range found {
 		if c.Provider == "" {

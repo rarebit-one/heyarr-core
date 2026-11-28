@@ -403,6 +403,10 @@ stable.
   profile with `vault.enabled=false`.
 
 ### Upgrading
+- **Migration 00079 adds `asset_items`** (#939). On the first start after the
+  upgrade, a quick backfill links multi-episode files you already hold to their
+  further episodes. The log reports how many links it added. Those episodes'
+  wants are satisfied on the next reconciliation pass, within 5 minutes.
 - **`heyarr space compact` and `POST /spaces/{id}/compact` changed shape**
   (#681). The route takes `{"snapshot_id"}` and answers `{base, pinned,
   dropped, waiting_for}`; a body with `frontier` is a 400. The command now opens
@@ -427,6 +431,22 @@ stable.
   alternative.
 
 ### Fixed
+- **An episode that only exists inside a season pack is acquired** (#938,
+  ADR-0093 amendment). An episode want searched only for `"<Title> SxxEyy"`, so
+  an episode no one released on its own stayed MISSING forever. The upgrade
+  workflow also never saw a better pack. When the episode search leaves nothing
+  the want could take, it now searches `"<Title> Sxx"` and adds what could
+  contain the episode: the season pack, or a multi-episode file. Those go
+  through the same blocklist, gate and profile. The sibling episodes of that
+  season do not each grab the same pack. While one want is fetching a release,
+  another want of the same work that chooses it rests, with a detail naming the
+  sibling. Once the pack is ingested, reconciliation satisfies it.
+- **A multi-episode file satisfies every episode it holds** (#939, ADR-0086
+  amendment). An `S03E08E09` file acquired for E08 was linked to E08 alone. So
+  E09's want stayed MISSING over bytes already held, and could acquire a second
+  copy. Ingest now also links the file to the further episodes its name spells,
+  in the same season and only when the name agrees with the episode it was
+  acquired for. Item-scoped satisfaction reads both links.
 - **A whole-space snapshot fits through the push routes** (#681). `POST
   /spaces/{id}/snapshots` and the peer's `POST /peer/v1/state/{space}/snapshots`
   accept a body of up to 64 MiB (`protocol.MaxSnapshotBody`), where they shared

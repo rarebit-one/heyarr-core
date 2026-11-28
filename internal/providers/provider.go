@@ -223,6 +223,12 @@ type Query struct {
 	// other code has to know it.
 	Season  int
 	Episode int
+	// SeasonPack asks for a whole season rather than one episode (#938): the
+	// term is "<Title> Sxx". The search handler sets it for the second, fallback
+	// search an episode want makes when its episode search found nothing it
+	// could take — a season that was only ever released as a pack. Ignored when
+	// Episode is set, so it can never widen an episode search by accident.
+	SeasonPack bool
 	// Limit bounds what a provider returns. Zero means the provider's own
 	// default. It exists so a search cannot be made to return a hundred
 	// thousand candidates for §63 to score.
@@ -235,6 +241,10 @@ type Query struct {
 // perfectly legal, but an episode number is 1-based, so a zero episode is the
 // honest sentinel for a search that is not episode-scoped.
 func (q Query) IsEpisode() bool { return q.Episode > 0 }
+
+// IsSeason reports whether this query asks for one whole season (#938). An
+// episode query is never a season query, whatever SeasonPack says.
+func (q Query) IsSeason() bool { return q.SeasonPack && !q.IsEpisode() }
 
 // SearchTerm is the free-text term to hand an indexer that only understands a
 // query string — the one place the query's title, year and (for an episode
@@ -250,6 +260,9 @@ func (q Query) IsEpisode() bool { return q.Episode > 0 }
 func (q Query) SearchTerm() string {
 	if q.IsEpisode() {
 		return fmt.Sprintf("%s S%02dE%02d", q.Title, q.Season, q.Episode)
+	}
+	if q.IsSeason() {
+		return fmt.Sprintf("%s S%02d", q.Title, q.Season)
 	}
 	if q.Year > 0 {
 		return fmt.Sprintf("%s %d", q.Title, q.Year)
