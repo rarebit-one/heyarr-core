@@ -95,6 +95,10 @@ func (c *Catalog) RecordAcquisition(ctx context.Context, a Acquisition) (bool, e
 	var created bool
 
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		if err := requireNoRepairHoldTx(ctx, tx, a.DesiredItemID); err != nil {
+			return err
+		}
+
 		// A want holds ONE acquisition (acquisitions.desired_item_id is UNIQUE).
 		// When a want re-grabs a DIFFERENT release — its selected candidate
 		// changed, so the transfer it points at changes — the row for the old
@@ -367,6 +371,7 @@ func (c *Catalog) StuckGrabs(ctx context.Context, grace time.Duration) ([]StuckG
 		JOIN release_candidates rc
 		  ON rc.desired_item_id = s.desired_item_id AND rc.selected = 1
 		WHERE s.phase = ?
+          AND NOT EXISTS (SELECT 1 FROM acquisition_repair_holds rh WHERE rh.desired_item_id=s.desired_item_id)
 		  AND s.content <> 'satisfied'
 		  AND a.trouble <> ''
 		  AND s.phase_entered_at < ?
@@ -452,6 +457,13 @@ func (c *Catalog) StrandedSelections(ctx context.Context, grace time.Duration) (
 // bytes Heyarr has not ingested yet.
 func (c *Catalog) DropAcquisition(ctx context.Context, desiredItemID string) error {
 	return c.db.InTx(ctx, func(tx *sql.Tx) error {
+		var held int
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM acquisition_repair_holds WHERE desired_item_id=?)`, desiredItemID).Scan(&held); err != nil {
+			return err
+		}
+		if held != 0 {
+			return ErrRepairHold
+		}
 		_, err := tx.ExecContext(ctx,
 			`DELETE FROM acquisitions WHERE desired_item_id = ?`, desiredItemID)
 		return err
@@ -464,6 +476,10 @@ func (c *Catalog) DropAcquisition(ctx context.Context, desiredItemID string) err
 func (c *Catalog) DropAcquisitionOf(ctx context.Context, desiredItemID, provider, externalID string) (bool, error) {
 	var n int64
 	err := c.db.InTx(ctx, func(tx *sql.Tx) error {
+		if err := requireNoRepairHoldTx(ctx, tx, desiredItemID); err != nil {
+			return err
+		}
+
 		res, err := tx.ExecContext(ctx,
 			`DELETE FROM acquisitions WHERE desired_item_id = ? AND provider = ? AND external_id = ?`,
 			desiredItemID, provider, externalID)

@@ -61,6 +61,8 @@ type wantContentArgs struct {
 	WorkID         string `json:"work_id"`
 	Title          string `json:"title"`
 	ContentType    string `json:"content_type"`
+	Artist         string `json:"artist"`
+	RecordingID    string `json:"recording_id"`
 	Year           int    `json:"year"`
 	StoreRef       string `json:"store_ref"`
 	Platform       string `json:"platform"`
@@ -90,6 +92,10 @@ func (s *Server) wantContent(ctx context.Context, raw json.RawMessage) (any, err
 		return nil, err
 	}
 
+	if (args.Artist != "" || args.RecordingID != "") && (args.Title == "" || args.WorkID != "") {
+		return nil, invalidParams("artist and recording_id require a title descriptor and cannot be supplied with work_id")
+	}
+
 	req := resources.WantContentRequest{
 		WorkID:         args.WorkID,
 		StoreRef:       storeRefForExisting(args),
@@ -100,6 +106,8 @@ func (s *Server) wantContent(ctx context.Context, raw json.RawMessage) (any, err
 	if args.Title != "" {
 		req.Work = &resources.WorkDescriptor{
 			ContentType: args.ContentType,
+			Artist:      args.Artist,
+			RecordingID: args.RecordingID,
 			Title:       args.Title,
 			Year:        args.Year,
 			StoreRef:    args.StoreRef,
@@ -176,6 +184,22 @@ func (s *Server) searchReleases(ctx context.Context, raw json.RawMessage) (any, 
 	return out, nil
 }
 
+// reingestAcquisition explicitly retries a completed transfer after repair.
+func (s *Server) reingestAcquisition(ctx context.Context, raw json.RawMessage) (any, error) {
+	var args searchReleasesArgs
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.DesiredItemID == "" {
+		return nil, invalidParams("desired_item_id is required")
+	}
+	out, err := s.resources.ReingestAcquisition(ctx, args.DesiredItemID)
+	if err != nil {
+		return nil, classify(err)
+	}
+	return out, nil
+}
+
 // acquireReleaseArgs is what acquireRelease decodes (held to its schema by schemaargs_test.go).
 type acquireReleaseArgs struct {
 	DesiredItemID string `json:"desired_item_id"`
@@ -223,7 +247,7 @@ func (s *Server) acquireRelease(ctx context.Context, raw json.RawMessage) (any, 
 			"change the profile if it should be acceptable, rather than overriding it here; " +
 			"explain_release will say which rule rejected it")
 	case errors.Is(err, catalog.ErrTransferInProgress),
-		errors.Is(err, catalog.ErrSearchInFlight), errors.Is(err, catalog.ErrImportInProgress):
+		errors.Is(err, catalog.ErrSearchInFlight), errors.Is(err, catalog.ErrImportInProgress), errors.Is(err, catalog.ErrRepairHold):
 		return nil, invalidParams("%s", resources.SelectRefusal(err))
 	case err != nil:
 		return nil, classify(err)
@@ -255,6 +279,8 @@ func (s *Server) acquireURL(ctx context.Context, args acquireReleaseArgs) (any, 
 	switch {
 	case errors.Is(err, acquisition.ErrTorrentURL):
 		return nil, invalidParams("%s — run search_releases and acquire its candidate instead", err)
+	case errors.Is(err, catalog.ErrRepairHold):
+		return nil, invalidParams("%s", resources.SelectRefusal(err))
 	case errors.Is(err, acquisition.ErrNotDirectURL),
 		errors.Is(err, resources.ErrNoHTTPClient),
 		errors.Is(err, resources.ErrNotResting):
@@ -311,7 +337,8 @@ func (s *Server) followSource(ctx context.Context, raw json.RawMessage) (any, er
 
 // discoverContentArgs is what discoverContent decodes (held to its schema by schemaargs_test.go).
 type discoverContentArgs struct {
-	Query string `json:"query"`
+	Query  string `json:"query"`
+	Artist string `json:"artist"`
 }
 
 // discoverContent is #451's discover_content — the "not-yet-in-library" search,
@@ -327,7 +354,7 @@ func (s *Server) discoverContent(ctx context.Context, raw json.RawMessage) (any,
 	if strings.TrimSpace(args.Query) == "" {
 		return nil, invalidParams("give me a query to discover on")
 	}
-	out, err := s.resources.Discover(ctx, resources.DiscoverRequest{Query: args.Query})
+	out, err := s.resources.Discover(ctx, resources.DiscoverRequest{Query: args.Query, Artist: args.Artist})
 	if err != nil {
 		return nil, classifyDiscover(err)
 	}

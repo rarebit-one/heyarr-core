@@ -97,6 +97,11 @@ func (p *CatalogAcquirePublisher) Publish(ctx context.Context, desiredItemID, ca
 	if candidateID != "" && facts.CandidateID != candidateID {
 		return fmt.Errorf("%w: grabbed %s, now selected %s", ErrSelectionChanged, candidateID, facts.CandidateID)
 	}
+	// Older peers do not understand recording-level metadata evidence. Keep
+	// these acquisitions local until capability-gated replication exists.
+	if strings.HasPrefix(facts.WorkKey, "music-recording:") {
+		return nil
+	}
 	// A release taken from a sibling's acquire op is not published again.
 	// The origin's op already reaches every site through the G-set, and an
 	// echo would come back to the origin as a "sibling's" choice: harmless

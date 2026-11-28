@@ -39,7 +39,7 @@ func (s *Server) registerLibraryTools() {
 			"youtube_channel/rss_feed result is followed (follow_source), a movie/book/music " +
 			"result has no calendar and is wanted instead (want_content by title+year+" +
 			"content_type). Use this when search_content came back empty and someone wants " +
-			"something new. Needs at least one metadata or enrich provider configured; a node " +
+			"something new. For a specific song provide artist and song title as query: results are recordings with recording_id and artist credits, and distinct versions can be reviewed. Needs at least one metadata or enrich provider configured; a node " +
 			"without one says so rather than returning nothing.",
 		InputSchema: schemaDiscoverContent,
 		Handler:     s.discoverContent,

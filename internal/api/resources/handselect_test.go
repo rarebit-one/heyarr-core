@@ -187,3 +187,18 @@ func TestBlockingTheReleaseInFlightCancelsAndReSearches(t *testing.T) {
 		t.Errorf("phase = %s, want still queued", p)
 	}
 }
+
+func TestSelectRefusesRepairHoldWithActionableConflict(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	h.seedCandidates(t)
+	h.exec(`INSERT INTO acquisition_repair_holds(desired_item_id,detail,created_at) VALUES(?, 'local repair needed', ?)`, desired1ID, seedTime)
+	resp := h.doStable(http.MethodPost, "/api/v1/desired/"+desired1ID+"/select", strings.NewReader(`{"candidate_id":"plain"}`))
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status=%d: %s", resp.StatusCode, h.body(resp))
+	}
+	detail := problemDetail(t, h, resp)
+	if !strings.Contains(detail, "local storage repair") || !strings.Contains(detail, "reingest") {
+		t.Fatalf("not actionable: %s", detail)
+	}
+}

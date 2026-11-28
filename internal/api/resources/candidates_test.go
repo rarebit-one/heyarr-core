@@ -581,3 +581,76 @@ func TestABlockByHandNeedsWrite(t *testing.T) {
 		t.Errorf("block with a read token = %d, want 403", resp.StatusCode)
 	}
 }
+
+func TestManualSearchPreservesRepairHold(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	h.exec(`INSERT INTO acquisition_repair_holds(desired_item_id,detail,created_at) VALUES(?, 'local repair needed', ?)`, desired1ID, seedTime)
+	resp := h.doStable(http.MethodPost, "/api/v1/desired/"+desired1ID+"/search", nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d: %s", resp.StatusCode, h.body(resp))
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM acquisition_repair_holds WHERE desired_item_id=?`, desired1ID); n != 1 {
+		t.Fatalf("repair hold missing: %d", n)
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM jobs WHERE type='search_release'`); n != 0 {
+		t.Fatalf("unexpected search job: %d", n)
+	}
+}
+
+func TestManualReingestRetriesHeldTransfer(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	h.queueOnGood(t, "idle", 1000)
+	h.exec(`INSERT INTO acquisition_repair_holds(desired_item_id,detail,created_at) VALUES(?, 'local repair needed', ?)`, desired1ID, seedTime)
+	resp := h.doStable(http.MethodPost, "/api/v1/desired/"+desired1ID+"/reingest", nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status=%d: %s", resp.StatusCode, h.body(resp))
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM acquisition_repair_holds WHERE desired_item_id=?`, desired1ID); n != 0 {
+		t.Fatalf("repair hold remains: %d", n)
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM acquisition_state WHERE desired_item_id=? AND phase='verifying'`, desired1ID); n != 1 {
+		t.Fatal("held transfer not returned to verifying")
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM jobs WHERE type='ingest_acquisition'`); n != 1 {
+		t.Fatalf("expected ingest job, got %d", n)
+	}
+}
+
+func TestDesiredShowsRepairHold(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	h.exec(`INSERT INTO acquisition_repair_holds(desired_item_id,detail,created_at) VALUES(?, 'local repair needed', ?)`, desired1ID, seedTime)
+	resp := h.get("/api/v1/desired/" + desired1ID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d: %s", resp.StatusCode, h.body(resp))
+	}
+	var body struct {
+		Acquisition struct {
+			RepairHeld bool `json:"repair_held"`
+		} `json:"acquisition"`
+	}
+	if err := json.Unmarshal(h.body(resp), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Acquisition.RepairHeld {
+		t.Fatal("repair hold not exposed")
+	}
+}
+
+func TestManualReingestWithoutTransferSearchesAfterExplicitRetry(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t).seed()
+	h.exec(`INSERT INTO acquisition_repair_holds(desired_item_id,detail,created_at) VALUES(?, 'local repair needed', ?)`, desired1ID, seedTime)
+	resp := h.doStable(http.MethodPost, "/api/v1/desired/"+desired1ID+"/reingest", nil)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status=%d: %s", resp.StatusCode, h.body(resp))
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM acquisition_repair_holds WHERE desired_item_id=?`, desired1ID); n != 0 {
+		t.Fatalf("repair hold remains: %d", n)
+	}
+	if n := h.countRows(t, `SELECT count(*) FROM jobs WHERE type='search_release'`); n != 1 {
+		t.Fatalf("expected search job, got %d", n)
+	}
+}

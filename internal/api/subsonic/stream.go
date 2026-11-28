@@ -76,7 +76,8 @@ func (h *Handler) resolveTrack(ctx context.Context, id string) (hash, mime strin
 		JOIN editions e ON e.id = a.edition_id
 		JOIN works w ON w.id = e.work_id
 		JOIN blobs b ON b.hash = a.blob_hash
-		WHERE a.id = ? AND a.role = 'primary' AND w.content_type = 'music'`, id).Scan(&hash, &mime)
+		WHERE a.id = ? AND a.role = 'primary' AND w.content_type = 'music'
+		  AND (w.work_key NOT LIKE 'music-recording:%' OR json_extract(w.attributes, '$.metadata_matched_blob') = a.blob_hash)`, id).Scan(&hash, &mime)
 	if !errors.Is(err, sql.ErrNoRows) {
 		return hash, mime, err
 	}
@@ -87,6 +88,7 @@ func (h *Handler) resolveTrack(ctx context.Context, id string) (hash, mime strin
 		JOIN assets a ON a.id = (
 			SELECT a2.id FROM assets a2
 			WHERE a2.edition_id = e.id AND a2.blob_hash IS NOT NULL AND a2.role = 'primary'
+			  AND (w.work_key NOT LIKE 'music-recording:%' OR json_extract(w.attributes, '$.metadata_matched_blob') = a2.blob_hash)
 			ORDER BY a2.id LIMIT 1)
 		JOIN blobs b ON b.hash = a.blob_hash
 		WHERE e.id = ? AND w.content_type = 'music'`, id).Scan(&hash, &mime)

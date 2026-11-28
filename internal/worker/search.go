@@ -65,6 +65,7 @@ const candidateRetention = 30 * 24 * time.Hour
 // SearchStore is the part of the catalog the search handler uses. A
 // *catalog.Catalog satisfies it; the handler depends on no more than it calls.
 type SearchStore interface {
+	AcquisitionRepairHeld(ctx context.Context, desiredItemID string) (bool, error)
 	AdvanceAcquisition(ctx context.Context, desiredItemID string, t acquisition.Transition, detail string) (catalog.AcquisitionRecord, error)
 	BlockedKeys(ctx context.Context, desiredItemID string) (map[string]catalog.BlockedRelease, error)
 	PruneCandidates(ctx context.Context, olderThan time.Time) (int64, error)
@@ -101,6 +102,13 @@ func SearchHandler(
 			log.Info("pruned superseded candidates", "rows", n)
 		}
 
+		held, err := cat.AcquisitionRepairHeld(ctx, payload.DesiredItemID)
+		if err != nil {
+			return err
+		}
+		if held {
+			return nil
+		}
 		sc, err := cat.SearchContextFor(ctx, payload.DesiredItemID)
 		if err != nil {
 			return err
@@ -117,15 +125,23 @@ func SearchHandler(
 			}
 			if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
 				acquisition.TransitionSearch, ""); err != nil {
+				if errors.Is(err, catalog.ErrRepairHold) {
+					return nil
+				}
 				return err
 			}
 		}
 
 		query := providers.Query{
 			Title:       sc.Title,
+			Artist:      sc.Artist,
 			Year:        sc.Year,
 			ContentType: sc.ContentType,
 			Limit:       candidateLimit,
+		}
+		if sc.RecordingID != "" {
+			// A recording may appear on later releases and compilations.
+			query.Year = 0
 		}
 		if sc.Platform != "" {
 			// A ROM is searched by its title alone (ADR-0121 §4): a year is not
@@ -195,6 +211,9 @@ func SearchHandler(
 			// quiet — RecordSearch emits even with nothing to store, which is
 			// the only trace an empty search leaves.
 			if _, err := cat.RecordSearch(ctx, payload.DesiredItemID, nil, sc.Held()); err != nil {
+				if errors.Is(err, catalog.ErrRepairHold) {
+					return nil
+				}
 				return err
 			}
 			if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,
@@ -235,6 +254,9 @@ func SearchHandler(
 			// nothing: the indexers answered, and every answer is one this
 			// want has already tried and been let down by.
 			if _, err := cat.RecordSearch(ctx, payload.DesiredItemID, nil, sc.Held()); err != nil {
+				if errors.Is(err, catalog.ErrRepairHold) {
+					return nil
+				}
 				return err
 			}
 			// CANDIDATES_FOUND first, then REJECT_ALL — the same two edges the
@@ -267,6 +289,21 @@ func SearchHandler(
 		// scorer; quality never again decides across seasons.
 		var ranked []acquisition.Ranked
 		switch {
+		case sc.RecordingID != "":
+			var plausible []acquisition.ReleaseCandidate
+			for _, c := range considered {
+				if identification.MusicReleaseCouldContain(c.Title, sc.Title, sc.Artist) {
+					plausible = append(plausible, c)
+				} else {
+					ranked = append(ranked, acquisition.RejectedByMatch(c, acquisition.Reason{
+						Rule: "recording.title_artist", Section: acquisition.SectionMatch,
+						Result: acquisition.ResultFail,
+						Detail: "release title does not identify the requested artist with the song or a likely album, or names an alternate performance",
+					}))
+				}
+			}
+			ranked = append(ranked, acquisition.EvaluateAll(plausible, sc.Profile)...)
+			acquisition.SortRanked(ranked)
 		case sc.IsEpisode:
 			survivors, rejected := gateSeasonEpisode(considered, sc.Season, sc.Episode)
 			if len(rejected) > 0 {
@@ -295,6 +332,9 @@ func SearchHandler(
 
 		outcome, err := cat.RecordSearch(ctx, payload.DesiredItemID, ranked, sc.Held())
 		if err != nil {
+			if errors.Is(err, catalog.ErrRepairHold) {
+				return nil
+			}
 			return err
 		}
 		if _, err := cat.AdvanceAcquisition(ctx, payload.DesiredItemID,

@@ -34,6 +34,8 @@ func TestQuerySearchTerm(t *testing.T) {
 		want string
 	}{
 		{"plain title", Query{Title: "Slow Horses"}, "Slow Horses"},
+		{"artist and title", Query{Title: "Jump", Artist: "Van Halen", ContentType: "music"}, "Van Halen Jump"},
+		{"artist does not affect films", Query{Title: "Jump", Artist: "Van Halen", ContentType: "movie"}, "Jump"},
 		{"title with year", Query{Title: "Slow Horses", Year: 2022}, "Slow Horses 2022"},
 		{"episode search drops the year", Query{Title: "Slow Horses", Year: 2022, Season: 1, Episode: 1}, "Slow Horses S01E01"},
 		{"episode search is zero-padded", Query{Title: "Slow Horses", Season: 12, Episode: 3}, "Slow Horses S12E03"},

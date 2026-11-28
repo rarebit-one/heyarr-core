@@ -220,6 +220,10 @@ func (s *FS) BindPeer(peerID string) error {
 	return s.writeMarker(marker)
 }
 
+// StagingDir is the store-owned writable temporary directory, on the same
+// volume as managed data. Callers must remove their private files.
+func (s *FS) StagingDir() string { return filepath.Join(s.root, tmpDir) }
+
 // Root is the directory this store occupies.
 func (s *FS) Root() string { return s.root }
 

@@ -3,7 +3,10 @@ package resources_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"github.com/rarebit-one/heyarr-core/internal/providers/musicbrainz"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -230,5 +233,44 @@ func TestDiscoverDeduplicatesAcrossProviders(t *testing.T) {
 	}
 	if len(out.Results) != 1 {
 		t.Errorf("the same series from two providers gave %d results, want 1", len(out.Results))
+	}
+}
+
+func TestDiscoverRecordingHTTP(t *testing.T) {
+	t.Parallel()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/recording/" {
+			t.Errorf("path: %s", r.URL.Path)
+		}
+		fmt.Fprint(w, `{"recordings":[{"id":"12345678-1234-4234-8234-123456789abc","title":"Time After Time","artist-credit":[{"name":"Cyndi Lauper","artist":{"id":"11111111-1111-4111-8111-111111111111","name":"Cyndi Lauper"}}]}]}`)
+	}))
+	defer upstream.Close()
+	reg := providers.New(nil)
+	mb, err := musicbrainz.New(musicbrainz.Options{Name: "mb", Endpoint: upstream.URL, MinInterval: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(mb); err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, withProviders(reg)).seed()
+	resp := discover(h, `{"query":"Time After Time","artist":"Cyndi Lauper"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("discover status %d: %s", resp.StatusCode, h.body(resp))
+	}
+	var out struct {
+		Results []struct {
+			RecordingID string `json:"recording_id"`
+			Type        string `json:"type"`
+			Artists     []struct {
+				Name string `json:"name"`
+			} `json:"artists"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(h.body(resp), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Results) != 1 || out.Results[0].RecordingID != "12345678-1234-4234-8234-123456789abc" || out.Results[0].Type != "music" || len(out.Results[0].Artists) != 1 || out.Results[0].Artists[0].Name != "Cyndi Lauper" {
+		t.Fatalf("results: %+v", out)
 	}
 }

@@ -83,6 +83,9 @@ func ApplyAcquireHandler(ops OpsReader, cat FanOutStore, q ProbeEnqueuer, selfKe
 		}
 		var applied, skipped int
 		for _, op := range view.Acquisitions {
+			if strings.HasPrefix(op.Target.WorkKey, "music-recording:") {
+				continue // old peers cannot enforce recording evidence
+			}
 			prior, seen := done[op.Hash]
 			if seen && prior.Outcome.Final() && !stale[op.Hash] {
 				continue

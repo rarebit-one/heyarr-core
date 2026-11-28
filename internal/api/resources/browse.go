@@ -94,8 +94,10 @@ func backdropPick(ctx context.Context, workRef string) pick {
 // `primary`-role asset in creation order — a series' copies span episodes,
 // and ranking them by picture would pick an arbitrary episode. Either way the
 // answer is stable across requests.
+const recordingAssetVisible = `EXISTS (SELECT 1 FROM works musicw WHERE musicw.id=e2.work_id AND (musicw.work_key NOT LIKE 'music-recording:%' OR json_extract(musicw.attributes, '$.metadata_matched_blob')=a2.blob_hash))`
+
 func primaryPick(ctx context.Context, workRef string) pick {
-	return assetPick(ctx, "e2.work_id = "+workRef, "primary", filmCopyRank)
+	return assetPick(ctx, "e2.work_id = "+workRef+" AND "+recordingAssetVisible, "primary", filmCopyRank)
 }
 
 // firstVideo is the first moving-picture stream of a2's probe, as JSON, or
@@ -129,7 +131,7 @@ var filmCopyRank = func() string {
 // editionPrimaryPick is primaryPick scoped to ONE edition (editionRef is a
 // column reference, e.g. `e.id`) — an episode's file, for a search hit.
 func editionPrimaryPick(ctx context.Context, editionRef string) pick {
-	return assetPick(ctx, "a2.edition_id = "+editionRef, "primary", "")
+	return assetPick(ctx, "a2.edition_id = "+editionRef+" AND "+recordingAssetVisible, "primary", "")
 }
 
 // assetPick is the shared correlated subquery: scope is the literal predicate

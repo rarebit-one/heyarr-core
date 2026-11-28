@@ -189,6 +189,7 @@ type desiredWant struct {
 	id               string
 	scope            string
 	workID           string
+	workKey          string
 	editionID        string
 	itemID           string
 	aspect           string
@@ -200,9 +201,9 @@ func (c *Catalog) desiredForReconcile(ctx context.Context, id string) (desiredWa
 	var w desiredWant
 	var edition, item sql.NullString
 	err := c.db.Reader().QueryRowContext(ctx, `
-		SELECT id, scope, work_id, edition_id, item_id, aspect, language, quality_profile_id
-		FROM desired_items WHERE id = ?`, id).
-		Scan(&w.id, &w.scope, &w.workID, &edition, &item, &w.aspect, &w.language, &w.qualityProfileID)
+		SELECT d.id, d.scope, d.work_id, d.edition_id, d.item_id, d.aspect, d.language, d.quality_profile_id, w.work_key
+		FROM desired_items d JOIN works w ON w.id = d.work_id WHERE d.id = ?`, id).
+		Scan(&w.id, &w.scope, &w.workID, &edition, &item, &w.aspect, &w.language, &w.qualityProfileID, &w.workKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return desiredWant{}, fmt.Errorf("catalog: no desired item %s: %w", id, err)
 	}
@@ -311,6 +312,7 @@ func (c *Catalog) assetsAndPackagesForWant(
 		LEFT JOIN blob_probes p ON p.blob_hash = a.blob_hash
 		WHERE ` + where + `
 		  AND a.missing_since IS NULL
+          AND (wk.work_key NOT LIKE 'music-recording:%' OR json_extract(wk.attributes, '$.metadata_matched_blob') = a.blob_hash)
 		ORDER BY a.id`
 
 	rows, err := c.db.Reader().QueryContext(ctx, stmt, args...)

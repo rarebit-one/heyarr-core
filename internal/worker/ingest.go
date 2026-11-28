@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 
@@ -30,6 +31,15 @@ func NewCASByteStore(store cas.Store) *CASByteStore { return &CASByteStore{store
 
 var _ ingest.ByteStore = (*CASByteStore)(nil)
 
+// StagingDir delegates to stores that expose a managed scratch directory.
+func (a *CASByteStore) StagingDir() (string, error) {
+	s, ok := a.store.(interface{ StagingDir() string })
+	if !ok {
+		return "", fmt.Errorf("ingest: content store has no staging directory")
+	}
+	return s.StagingDir(), nil
+}
+
 // Link materialises a source file into the store.
 func (a *CASByteStore) Link(ctx context.Context, sourcePath string, mode ingest.Materialisation) (ingest.Blob, error) {
 	desc, err := a.store.Link(ctx, sourcePath, cas.Materialisation(mode))
@@ -43,6 +53,21 @@ func (a *CASByteStore) Link(ctx context.Context, sourcePath string, mode ingest.
 		Deduplicated:    desc.Deduplicated,
 		DegradedBecause: desc.DegradedBecause,
 	}, nil
+}
+
+// CheckPrivateBlob conservatively rejects a blob with external hardlinks.
+func (a *CASByteStore) CheckPrivateBlob(ctx context.Context, hash string) error {
+	s, ok := a.store.(interface {
+		CheckPrivateBlob(context.Context, hashing.Hash) error
+	})
+	if !ok {
+		return fmt.Errorf("ingest: content store cannot prove private blob")
+	}
+	h, err := hashing.Parse(hash)
+	if err != nil {
+		return err
+	}
+	return s.CheckPrivateBlob(ctx, h)
 }
 
 // OpenBlob gives the pipeline random access to stored bytes, for reading a

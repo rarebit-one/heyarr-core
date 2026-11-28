@@ -6027,7 +6027,8 @@ paths:
               type: object
               required: [query]
               properties:
-                query: { type: string }
+                query: { type: string, description: "Free text, or song title when artist is supplied." }
+                artist: { type: string, description: "Search for recordings by this artist and the song title in query." }
       responses:
         "200":
           description: The candidate works that matched, deduplicated across providers.
@@ -11510,6 +11511,9 @@ components:
         detail:
           type: string
           description: Why the last pipeline move happened, when it was a failure.
+        repair_held:
+          type: boolean
+          description: Local repair is required; automatic search and acquisition are paused until explicit reingest.
         bytes_total:
           type: integer
           format: int64
@@ -11550,6 +11554,9 @@ components:
         detail:
           type: string
           description: Why the last pipeline move happened, when it was a failure.
+        repair_held:
+          type: boolean
+          description: Local repair is required; automatic work is paused until explicit reingest.
         transfer:
           $ref: "#/components/schemas/AcquisitionTransfer"
         fan_out:
@@ -11811,6 +11818,13 @@ components:
           type: string
           description: "`movie`, `series`, `music`, `book`, … (§12)."
         title: { type: string }
+        artist:
+          type: string
+          description: Artist for a recording-specific music request; required with recording_id.
+        recording_id:
+          type: string
+          format: uuid
+          description: MusicBrainz recording UUID. Automatic acquisition and satisfaction are disabled until recording verification is supported.
         year:
           type: integer
           description: |
@@ -12104,6 +12118,26 @@ components:
       required: [title, type]
       properties:
         title: { type: string }
+        recording_id: { type: string, description: "MusicBrainz recording UUID for a structured artist and title search." }
+        disambiguation: { type: string }
+        duration_ms: { type: integer, format: int64 }
+        score: { type: integer, description: "Search relevance, not audio verification confidence." }
+        artists:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              name: { type: string }
+              join_phrase: { type: string }
+        releases:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              title: { type: string }
+              date: { type: string }
         year: { type: integer }
         type:
           type: string

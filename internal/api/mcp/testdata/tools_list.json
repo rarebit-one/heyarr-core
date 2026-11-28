@@ -165,10 +165,14 @@
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
-      "description": "Find content the library does NOT already hold. Where search_content looks only in the library, this asks every configured metadata provider (TVDB/TMDB for series, TMDB for movies, Open Library for books, MusicBrainz for music) for candidate works matching a free-text title, whether or not they are catalogued — the \"search then acquire\" door. A tv_series result carries a tvdb_id you pass straight to follow_source; every result (including movie/book/music) carries source+external_id for reference and a type telling you which: a tv_series/podcast/youtube_channel/rss_feed result is followed (follow_source), a movie/book/music result has no calendar and is wanted instead (want_content by title+year+content_type). Use this when search_content came back empty and someone wants something new. Needs at least one metadata or enrich provider configured; a node without one says so rather than returning nothing.",
+      "description": "Find content the library does NOT already hold. Where search_content looks only in the library, this asks every configured metadata provider (TVDB/TMDB for series, TMDB for movies, Open Library for books, MusicBrainz for music) for candidate works matching a free-text title, whether or not they are catalogued — the \"search then acquire\" door. A tv_series result carries a tvdb_id you pass straight to follow_source; every result (including movie/book/music) carries source+external_id for reference and a type telling you which: a tv_series/podcast/youtube_channel/rss_feed result is followed (follow_source), a movie/book/music result has no calendar and is wanted instead (want_content by title+year+content_type). Use this when search_content came back empty and someone wants something new. For a specific song provide artist and song title as query: results are recordings with recording_id and artist credits, and distinct versions can be reviewed. Needs at least one metadata or enrich provider configured; a node without one says so rather than returning nothing.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "artist": {
+            "description": "For a song, pass the recording artist with the song title in query to discover MusicBrainz recording IDs and versions.",
+            "type": "string"
+          },
           "query": {
             "description": "The title to look up. Sent to the metadata provider as free text, so it need not match anything already in the library — that is the point.",
             "type": "string"
@@ -799,6 +803,28 @@
     },
     {
       "annotations": {
+        "heyarr/requiredScope": "write",
+        "readOnlyHint": false
+      },
+      "description": "After repairing local storage, explicitly retry importing a completed acquisition. This releases its local repair hold and queues an ingest job.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "desired_item_id": {
+            "description": "The want to look for releases of.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "desired_item_id"
+        ],
+        "type": "object"
+      },
+      "name": "reingest_acquisition",
+      "title": "Retry an acquisition import"
+    },
+    {
+      "annotations": {
         "heyarr/requiredScope": "read",
         "readOnlyHint": true
       },
@@ -968,6 +994,10 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "artist": {
+            "description": "For a recording-specific music request, supply its artist together with recording_id.",
+            "type": "string"
+          },
           "content_type": {
             "description": "Required with title: movie, series, music, book, document, game, rom.",
             "type": "string"
@@ -986,6 +1016,10 @@
           },
           "reason": {
             "description": "A note for whoever reads this in six months. Never interpreted.",
+            "type": "string"
+          },
+          "recording_id": {
+            "description": "Canonical MusicBrainz recording UUID. Automatic acquisition and satisfaction are disabled until audio verification is supported.",
             "type": "string"
           },
           "store_ref": {

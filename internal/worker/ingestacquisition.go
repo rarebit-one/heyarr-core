@@ -12,11 +12,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/rarebit-one/void-which-binds-go/hashing"
+
 	"github.com/rarebit-one/heyarr-core/internal/domain/acquisition"
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/ingest"
 	"github.com/rarebit-one/heyarr-core/internal/jobs"
 	"github.com/rarebit-one/heyarr-core/internal/persistence/catalog"
+	"github.com/rarebit-one/heyarr-core/internal/storagefabric/integrity"
 )
 
 // Ingest of completed acquisitions (§65, §66, M3-13).
@@ -80,6 +83,9 @@ type IngestAcquisitionStore interface {
 	SearchContextFor(ctx context.Context, desiredItemID string) (catalog.SearchContext, error)
 	SelectedCandidate(ctx context.Context, desiredItemID string) (catalog.Candidate, error)
 	RecordVerifiedStoreEditions(ctx context.Context, editionIDs []string, pkg catalog.VerifiedStorePackage) error
+	RecordMusicMetadataMatch(ctx context.Context, workID, assetID, hash string) error
+	BlobSize(ctx context.Context, blobHash string) (int64, error)
+	HoldAcquisitionForRepair(ctx context.Context, id, detail string) error
 	SetAssetItem(ctx context.Context, assetID, itemID string) error
 	WorkForDesired(ctx context.Context, desiredItemID string) (catalog.DesiredWork, error)
 }
@@ -183,6 +189,17 @@ func IngestAcquisitionHandler(
 				catalog.BlockVerificationFailed, verifyErr, log)
 		}
 
+		if sc.RecordingID != "" {
+			batch, err = selectMusicArtifact(ctx, pipeline, batch, sc.Title, sc.Artist)
+			if err != nil {
+				if errors.Is(err, errMusicMatch) {
+					return failAcquisition(ctx, cat, payload.DesiredItemID, acq,
+						catalog.BlockVerificationFailed, err, log)
+				}
+				return fmt.Errorf("%w: inspecting music tags: %v", jobs.ErrTransient, err)
+			}
+		}
+
 		// The VERIFYING→INGESTING edge is skipped on a resume: the want is
 		// already there, and re-applying the transition would be illegal.
 		if !resuming {
@@ -194,11 +211,32 @@ func IngestAcquisitionHandler(
 
 		results, linked, ingestErr := ingestArtifacts(ctx, cat, roots, pipeline, payload.DesiredItemID, sc, batch)
 		if ingestErr != nil {
+			if sc.RecordingID != "" {
+				// A local CAS or copy failure is not evidence that the release
+				// is wrong. Record an actionable node-local failure without
+				// blocking the candidate or keeping a job in retry forever.
+				detail := "local music storage needs repair"
+				var mismatch *hashing.ErrMismatch
+				if errors.As(ingestErr, &mismatch) {
+					var queueErr error
+					detail, queueErr = queueMusicIntegrityCheck(ctx, cat, probes, mismatch.Want.String())
+					if queueErr != nil {
+						return queueErr
+					}
+				}
+				return cat.HoldAcquisitionForRepair(ctx, payload.DesiredItemID, fmt.Sprintf("%s: %v", detail, ingestErr))
+			}
 			// A local problem, most likely, rather than a bad release — which
 			// is why it is blocked under a DIFFERENT reason. See
 			// catalog.BlockIngestFailed.
 			return failAcquisition(ctx, cat, payload.DesiredItemID, acq,
 				catalog.BlockIngestFailed, ingestErr, log)
+		}
+
+		if sc.RecordingID != "" && len(results) == 1 && results[0].AssetID != "" {
+			if err := cat.RecordMusicMetadataMatch(ctx, results[0].WorkID, results[0].AssetID, results[0].BlobHash); err != nil {
+				return fmt.Errorf("recording music tag match: %w", err)
+			}
 		}
 
 		// A store package the store verified file by file earns its store facts
@@ -264,6 +302,27 @@ func IngestAcquisitionHandler(
 	}
 }
 
+// queueMusicIntegrityCheck delegates known-blob corruption to the existing
+// integrity worker. The worker intentionally skips untracked blobs, so those
+// require operator repair; never pretend an enqueued no-op will quarantine them.
+func queueMusicIntegrityCheck(ctx context.Context, cat IngestAcquisitionStore, queue ProbeEnqueuer, hash string) (string, error) {
+	_, err := cat.BlobSize(ctx, hash)
+	if errors.Is(err, catalog.ErrBlobSizeUnknown) {
+		return "local music storage needs repair: corrupt untracked CAS blob; operator action required", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("checking whether corrupt music blob is tracked: %w", err)
+	}
+	if queue == nil {
+		return "local music storage needs repair: integrity worker unavailable", nil
+	}
+	_, err = queue.Enqueue(ctx, jobs.EnqueueOptions{Type: integrity.VerifyJobType, Payload: integrity.VerifyPayload{Hash: hash}, DedupeKey: "verify:" + hash})
+	if err != nil {
+		return "", fmt.Errorf("queueing music blob integrity check: %w", err)
+	}
+	return "local music storage needs repair: integrity verification queued", nil
+}
+
 // artifact is a verified file, ready for the pipeline.
 //
 // It carries NO hash, and that is a correction rather than an omission.
@@ -284,9 +343,10 @@ func IngestAcquisitionHandler(
 // once, by the CAS, on the way in. Invariant 1 is upheld where the bytes are
 // actually taken under management, which is the only place it can be upheld.
 type artifact struct {
-	Path    string
-	RelPath string
-	Size    int64
+	expectedBlobHash string
+	Path             string
+	RelPath          string
+	Size             int64
 }
 
 // verifiedTransfer is what a completed download resolved to: one file, or
@@ -655,7 +715,7 @@ func ingestArtifacts(
 	if !batch.pack {
 		a := batch.artifacts[0]
 		res, ierr := pipeline.Ingest(ctx, ingest.Request{
-			RootID: root.ID, SourcePath: a.Path, RelPath: a.RelPath, Work: override,
+			RootID: root.ID, SourcePath: a.Path, RelPath: a.RelPath, Work: override, ExpectedBlobHash: a.expectedBlobHash,
 		})
 		if ierr != nil {
 			return nil, 0, ierr
@@ -697,7 +757,7 @@ func ingestArtifacts(
 	results = make([]ingest.Result, 0, len(batch.artifacts))
 	for _, a := range batch.artifacts {
 		res, ierr := pipeline.Ingest(ctx, ingest.Request{
-			RootID: root.ID, SourcePath: a.Path, RelPath: a.RelPath, Work: override,
+			RootID: root.ID, SourcePath: a.Path, RelPath: a.RelPath, Work: override, ExpectedBlobHash: a.expectedBlobHash,
 		})
 		if ierr != nil {
 			return nil, 0, ierr

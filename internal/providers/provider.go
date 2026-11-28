@@ -203,6 +203,8 @@ const (
 type Query struct {
 	// Title is the work's title, already normalised by the caller.
 	Title string
+	// Artist narrows music searches; it does not establish recording identity.
+	Artist string
 	// Year disambiguates, and is zero when unknown. Zero means "do not
 	// constrain" rather than "the year 0" — a provider must not send it.
 	Year int
@@ -251,10 +253,14 @@ func (q Query) SearchTerm() string {
 	if q.IsEpisode() {
 		return fmt.Sprintf("%s S%02dE%02d", q.Title, q.Season, q.Episode)
 	}
-	if q.Year > 0 {
-		return fmt.Sprintf("%s %d", q.Title, q.Year)
+	term := q.Title
+	if q.ContentType == "music" && strings.TrimSpace(q.Artist) != "" {
+		term = strings.TrimSpace(q.Artist) + " " + term
 	}
-	return q.Title
+	if q.Year > 0 {
+		return fmt.Sprintf("%s %d", term, q.Year)
+	}
+	return term
 }
 
 // Validate refuses a query that cannot mean anything.

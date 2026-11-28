@@ -438,7 +438,9 @@ func (a *API) deviceProfile(ctx context.Context, id string) (playback.DeviceProf
 func (a *API) mediaProfile(ctx context.Context, assetID string, audioLanguages []string) (playback.MediaProfile, string, error) {
 	var blobHash sql.NullString
 	if err := a.reader.QueryRowContext(ctx,
-		`SELECT blob_hash FROM assets WHERE id = ?`, assetID).Scan(&blobHash); err != nil {
+		`SELECT a.blob_hash FROM assets a JOIN editions e ON e.id=a.edition_id
+		 JOIN works w ON w.id=e.work_id WHERE a.id = ?
+		 AND (w.work_key NOT LIKE 'music-recording:%' OR json_extract(w.attributes, '$.metadata_matched_blob')=a.blob_hash)`, assetID).Scan(&blobHash); err != nil {
 		return playback.MediaProfile{}, "", err
 	}
 	// A linked asset has no blob at all (ADR-0020) and therefore no probe.

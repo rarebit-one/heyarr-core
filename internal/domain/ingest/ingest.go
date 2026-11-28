@@ -26,6 +26,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/identification"
 	"github.com/rarebit-one/heyarr-core/internal/domain/publication"
+	"github.com/rarebit-one/void-which-binds-go/hashing"
 )
 
 // JobType is the queue's name for this work. The scanner, the acquisition
@@ -240,8 +241,23 @@ var (
 	ErrRootNotFound = errors.New("ingest: library root not found")
 )
 
+// verifyContextReader stops full-blob verification promptly when the job ends.
+type verifyContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r verifyContextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
+}
+
 // Request is one artifact to bring under management.
 type Request struct {
+	// ExpectedBlobHash binds pre-ingest inspection to the exact recorded bytes.
+	ExpectedBlobHash string
 	// RootID names the library root the file was found under.
 	RootID string
 	// SourcePath is the absolute path on the ingesting host. It is provenance,
@@ -294,6 +310,16 @@ type Options struct {
 	Identifier Identifier
 	Clock      Clock
 	Logger     *slog.Logger
+}
+
+// StagingDir returns a store-owned staging location when the configured store
+// supports it. It is never inferred from a process home or /tmp.
+func (p *Pipeline) StagingDir() (string, error) {
+	s, ok := p.store.(interface{ StagingDir() (string, error) })
+	if !ok {
+		return "", errors.New("ingest: store does not provide a staging directory")
+	}
+	return s.StagingDir()
 }
 
 // Pipeline runs the ingest sequence.
@@ -360,6 +386,9 @@ func (p *Pipeline) Ingest(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("%w: %s", ErrLinkedRoot, root.ID)
 	}
 	mode := root.Mode
+	if req.ExpectedBlobHash != "" {
+		mode = Copy
+	}
 	if mode == "" {
 		mode = Reflink
 	}
@@ -398,6 +427,38 @@ func (p *Pipeline) Ingest(ctx context.Context, req Request) (Result, error) {
 	blob, err := p.store.Link(ctx, req.SourcePath, mode)
 	if err != nil {
 		return Result{}, fmt.Errorf("ingest: materialising %s: %w", req.SourcePath, err)
+	}
+	if req.ExpectedBlobHash != "" && blob.Hash != req.ExpectedBlobHash {
+		return Result{}, errors.New("ingest: source bytes changed after inspection")
+	}
+	if req.ExpectedBlobHash != "" {
+		reader, size, err := p.store.OpenBlob(ctx, blob.Hash)
+		if err != nil {
+			return Result{}, fmt.Errorf("ingest: opening inspected blob: %w", err)
+		}
+		expected, err := hashing.Parse(req.ExpectedBlobHash)
+		if err != nil {
+			_ = reader.Close()
+			return Result{}, fmt.Errorf("ingest: invalid inspected blob digest: %w", err)
+		}
+		_, verifyErr := hashing.Verify(verifyContextReader{ctx: ctx, reader: io.NewSectionReader(reader, 0, size)}, expected)
+		closeErr := reader.Close()
+		if verifyErr != nil {
+			return Result{}, fmt.Errorf("ingest: stored bytes differ from inspected bytes: %w", verifyErr)
+		}
+		if closeErr != nil {
+			return Result{}, fmt.Errorf("ingest: closing inspected blob: %w", closeErr)
+		}
+		private, ok := p.store.(interface {
+			CheckPrivateBlob(context.Context, string) error
+		})
+		if !ok {
+			return Result{}, errors.New("ingest: store cannot establish private blob")
+		}
+		if err := private.CheckPrivateBlob(ctx, blob.Hash); err != nil {
+			return Result{}, fmt.Errorf("ingest: cannot establish private blob: %w", err)
+		}
+
 	}
 	p.warnIfTheLadderFellToACopy(mode, blob, req.SourcePath)
 

@@ -190,12 +190,14 @@ type wantSummary struct {
 	Scope         string `json:"scope"`
 	// Item is the item's title at item scope (its key when the feed gave it
 	// no title); Edition the edition's label at edition scope. Absent otherwise.
-	Item    string `json:"item,omitempty"`
-	Edition string `json:"edition,omitempty"`
-	Profile string `json:"quality_profile"`
-	State   string `json:"state"`
-	Monitor bool   `json:"monitor"`
-	Reason  string `json:"reason,omitempty"`
+	Item         string `json:"item,omitempty"`
+	Edition      string `json:"edition,omitempty"`
+	Profile      string `json:"quality_profile"`
+	State        string `json:"state"`
+	Monitor      bool   `json:"monitor"`
+	Reason       string `json:"reason,omitempty"`
+	RepairHeld   bool   `json:"repair_held,omitempty"`
+	RepairDetail string `json:"repair_detail,omitempty"`
 }
 
 // wantQuery is the shared read behind get_missing_content and
@@ -210,13 +212,14 @@ func (s *Server) wantQuery(ctx context.Context, predicate string, limit int) (an
 		SELECT d.id, d.work_id, w.title, d.scope,
 		       COALESCE(NULLIF(i.title, ''), i.item_key, ''), COALESCE(e.label, ''),
 		       q.name, d.monitor, d.reason,
-		       a.phase, a.managed, a.content, a.placement
+		       a.phase, a.managed, a.content, a.placement, COALESCE(rh.detail, '')
 		FROM desired_items d
 		JOIN works w ON w.id = d.work_id
 		JOIN quality_profiles q ON q.id = d.quality_profile_id
 		LEFT JOIN items i ON i.id = d.item_id
 		LEFT JOIN editions e ON e.id = d.edition_id
 		LEFT JOIN acquisition_state a ON a.desired_item_id = d.id
+		LEFT JOIN acquisition_repair_holds rh ON rh.desired_item_id = d.id
 		WHERE ` + predicate + `
 		ORDER BY d.created_at, d.id
 		LIMIT ?`
@@ -240,10 +243,11 @@ func (s *Server) wantQuery(ctx context.Context, predicate string, limit int) (an
 			managed                   *int64
 		)
 		if err := rows.Scan(&w.DesiredItemID, &w.WorkID, &w.Title, &w.Scope, &w.Item, &w.Edition,
-			&w.Profile, &monitor, &w.Reason, &phase, &managed, &content, &placement); err != nil {
+			&w.Profile, &monitor, &w.Reason, &phase, &managed, &content, &placement, &w.RepairDetail); err != nil {
 			return nil, err
 		}
 		w.Monitor = monitor == 1
+		w.RepairHeld = w.RepairDetail != ""
 		w.State = deriveState(phase, managed, content, placement)
 		out.Wants = append(out.Wants, w)
 	}
