@@ -11,10 +11,13 @@ import (
 	"github.com/rarebit-one/heyarr-core/internal/providers"
 )
 
-// Recording types are provider-neutral so the API can route discovery without
-// depending on this adapter.
+// RecordingCandidate is provider-neutral so callers need not depend on this adapter.
 type RecordingCandidate = providers.RecordingCandidate
+
+// RecordingArtist is one credited artist in a recording result.
 type RecordingArtist = providers.RecordingArtist
+
+// RecordingRelease is a release associated with a recording result.
 type RecordingRelease = providers.RecordingRelease
 
 const maxRecordingResults = 20

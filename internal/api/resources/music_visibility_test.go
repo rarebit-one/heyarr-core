@@ -1,3 +1,4 @@
+//nolint:bodyclose // responses are closed by the harness cleanup.
 package resources_test
 
 import (

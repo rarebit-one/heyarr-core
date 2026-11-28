@@ -196,7 +196,7 @@ func IngestAcquisitionHandler(
 					return failAcquisition(ctx, cat, payload.DesiredItemID, acq,
 						catalog.BlockVerificationFailed, err, log)
 				}
-				return fmt.Errorf("%w: inspecting music tags: %v", jobs.ErrTransient, err)
+				return fmt.Errorf("%w: inspecting music tags: %w", jobs.ErrTransient, err)
 			}
 		}
 

@@ -47,7 +47,7 @@ func TestRecordingIngestWithRealFFmpegSelectsPlaybackBytes(t *testing.T) {
 		t.Fatalf("state %s", got)
 	}
 	pack := filepath.Join(h.downloads, "album")
-	if err := os.MkdirAll(pack, 0755); err != nil {
+	if err := os.MkdirAll(pack, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, track := range []struct{ file, artist, freq string }{{"01-wrong.flac", "Another Artist", "440"}, {"02-matching.flac", "Van Halen", "880"}} {
@@ -133,7 +133,7 @@ func TestRecordingIngestWithRealFFmpegSelectsPlaybackBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	got, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatal(err)

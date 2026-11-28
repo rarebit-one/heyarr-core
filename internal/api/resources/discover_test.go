@@ -4,7 +4,6 @@ package resources_test
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/rarebit-one/heyarr-core/internal/providers/musicbrainz"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/musicbrainz"
 )
 
 // Discovery search over the real HTTP surface (§55, M12, #451) — the

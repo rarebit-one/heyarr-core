@@ -28,7 +28,7 @@ func TestSelectMusicArtifactChoosesUniqueTaggedFile(t *testing.T) {
   *) exit 1 ;;
  esac
  `
-	if err := os.WriteFile(filepath.Join(bin, "ffprobe"), []byte(script), 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "ffprobe"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -36,7 +36,7 @@ func TestSelectMusicArtifactChoosesUniqueTaggedFile(t *testing.T) {
 	path2 := filepath.Join(h.downloads, "2.flac")
 	pathLive := filepath.Join(h.downloads, "3 Jump Live.flac")
 	for path, content := range map[string]string{path1: "wrong\n", path2: "correct\n", pathLive: "correct\n"} {
-		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -48,7 +48,7 @@ func TestSelectMusicArtifactChoosesUniqueTaggedFile(t *testing.T) {
 	if len(selected.artifacts) != 1 || selected.artifacts[0].Path != path2 || selected.artifacts[0].expectedBlobHash == "" {
 		t.Fatalf("selection %+v", selected)
 	}
-	if err := os.WriteFile(path2, []byte("changed\n"), 0600); err != nil {
+	if err := os.WriteFile(path2, []byte("changed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err = h.pipeline.Ingest(context.Background(), ingest.Request{RootID: "root1", SourcePath: path2, RelPath: "2.flac", ExpectedBlobHash: selected.artifacts[0].expectedBlobHash})
@@ -69,7 +69,7 @@ func TestRecordingRequestSearchAndPackIngest(t *testing.T) {
   *) exit 1 ;;
  esac
  `
-	if err := os.WriteFile(filepath.Join(bin, "ffprobe"), []byte(script), 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "ffprobe"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -85,11 +85,11 @@ func TestRecordingRequestSearchAndPackIngest(t *testing.T) {
 		t.Fatalf("state %s", got)
 	}
 	pack := filepath.Join(h.downloads, "album")
-	if err := os.MkdirAll(pack, 0755); err != nil {
+	if err := os.MkdirAll(pack, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for filename, data := range map[string]string{"01.flac": "wrong\n", "02.flac": "correct\n"} {
-		if err := os.WriteFile(filepath.Join(pack, filename), []byte(data), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(pack, filename), []byte(data), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -123,7 +123,7 @@ func TestRecordingRequestSearchAndPackIngest(t *testing.T) {
 func TestMusicIngestRefusesCorruptDeduplicatedBlob(t *testing.T) {
 	h := newIngestHarness(t)
 	path := filepath.Join(h.downloads, "audio.flac")
-	if err := os.WriteFile(path, []byte("original bytes"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("original bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := cas.OpenFS(filepath.Join(filepath.Dir(h.downloads), "cas"))
@@ -138,10 +138,10 @@ func TestMusicIngestRefusesCorruptDeduplicatedBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(stored, 0600); err != nil {
+	if err := os.Chmod(stored, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(stored, []byte("corrupt bytes!"), 0600); err != nil {
+	if err := os.WriteFile(stored, []byte("corrupt bytes!"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err = h.pipeline.Ingest(context.Background(), ingest.Request{RootID: "root1", SourcePath: path, RelPath: "audio.flac", ExpectedBlobHash: blob.Hash.String()})
@@ -159,7 +159,7 @@ func TestMusicInspectionRejectsStageMutationAndBadAudio(t *testing.T) {
 	probe := filepath.Join(bin, "ffprobe")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	path := filepath.Join(t.TempDir(), "audio.flac")
-	if err := os.WriteFile(path, []byte("music"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("music"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mutation := `#!/bin/sh
@@ -167,14 +167,14 @@ for x do :; done
 printf bad > "$x"
 printf '%s' '{"format":{"tags":{"artist":"Van Halen","title":"Jump"}}}'
 `
-	if err := os.WriteFile(probe, []byte(mutation), 0755); err != nil {
+	if err := os.WriteFile(probe, []byte(mutation), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	_, _, err := inspectMusicMetadata(context.Background(), t.TempDir(), path)
 	if err == nil || !strings.Contains(err.Error(), "staged bytes changed") {
 		t.Fatalf("mutation not rejected: %v", err)
 	}
-	if err := os.WriteFile(probe, []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
+	if err := os.WriteFile(probe, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	_, _, err = inspectMusicMetadata(context.Background(), t.TempDir(), path)
@@ -194,7 +194,7 @@ printf '%s' '{"format":{"tags":{"artist":"Van Halen","title":"Jump"}}}'
 func TestMusicIngestRefusesDeduplicatedHardlink(t *testing.T) {
 	h := newIngestHarness(t)
 	path := filepath.Join(h.downloads, "audio.flac")
-	if err := os.WriteFile(path, []byte("audio bytes"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("audio bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := cas.OpenFS(filepath.Join(filepath.Dir(h.downloads), "cas"))
@@ -215,7 +215,7 @@ func TestMusicIngestRefusesDeduplicatedHardlink(t *testing.T) {
 func TestMusicIngestResumesPrivateDeduplicatedBlob(t *testing.T) {
 	h := newIngestHarness(t)
 	path := filepath.Join(h.downloads, "audio.flac")
-	if err := os.WriteFile(path, []byte("audio bytes"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("audio bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	hash, _, err := hashing.HashFile(path)
@@ -239,7 +239,7 @@ func TestMusicSharedBlobFailsLocallyWithoutBlockingCandidate(t *testing.T) {
 	script := `#!/bin/sh
 printf '%s' '{"format":{"tags":{"artist":"Van Halen","title":"Jump"}}}'
 `
-	if err := os.WriteFile(filepath.Join(bin, "ffprobe"), []byte(script), 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "ffprobe"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -252,7 +252,7 @@ printf '%s' '{"format":{"tags":{"artist":"Van Halen","title":"Jump"}}}'
 		t.Fatal(err)
 	}
 	path := filepath.Join(h.downloads, "track.flac")
-	if err := os.WriteFile(path, []byte("audio"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("audio"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := cas.OpenFS(filepath.Join(filepath.Dir(h.downloads), "cas"))
@@ -375,7 +375,7 @@ func TestMusicCorruptTrackedBlobQueuesIntegrityWithoutBlocking(t *testing.T) {
 	script := `#!/bin/sh
 printf '%s' '{"format":{"tags":{"artist":"Van Halen","title":"Jump"}}}'
 `
-	if err := os.WriteFile(filepath.Join(bin, "ffprobe"), []byte(script), 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "ffprobe"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -388,7 +388,7 @@ printf '%s' '{"format":{"tags":{"artist":"Van Halen","title":"Jump"}}}'
 		t.Fatal(err)
 	}
 	path := filepath.Join(h.downloads, "track.flac")
-	if err := os.WriteFile(path, []byte("good-audio"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("good-audio"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := cas.OpenFS(filepath.Join(filepath.Dir(h.downloads), "cas"))
@@ -403,10 +403,10 @@ printf '%s' '{"format":{"tags":{"artist":"Van Halen","title":"Jump"}}}'
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(stored, 0600); err != nil {
+	if err := os.Chmod(stored, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(stored, []byte("bad--audio"), 0600); err != nil {
+	if err := os.WriteFile(stored, []byte("bad--audio"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	h.exec(t, `INSERT INTO blobs (hash,size,first_seen_at) VALUES (?,10,?)`, blob.Hash.String(), time.Now().UTC().Format(time.RFC3339Nano))

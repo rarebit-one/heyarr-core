@@ -42,9 +42,9 @@ func inspectMusicMetadata(ctx context.Context, stagingDir, path string) (string,
 	if err != nil {
 		return "", nil, fmt.Errorf("creating private staging file: %w", err)
 	}
-	defer os.Remove(stage.Name())
-	defer stage.Close()
-	source, err := os.Open(path)
+	defer func() { _ = os.Remove(stage.Name()) }()
+	defer func() { _ = stage.Close() }()
+	source, err := os.Open(path) // #nosec G304 -- path is a verified acquisition artifact
 	if err != nil {
 		return "", nil, fmt.Errorf("opening source: %w", err)
 	}
@@ -62,7 +62,7 @@ func inspectMusicMetadata(ctx context.Context, stagingDir, path string) (string,
 		return "", nil, fmt.Errorf("closing staging file: %w", err)
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	cmd := exec.CommandContext(probeCtx, "ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "json", stage.Name())
+	cmd := exec.CommandContext(probeCtx, "ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "json", stage.Name()) // #nosec G204 -- stage is a private file created above; no shell is used
 	output, err := cmd.Output()
 	timedOut := probeCtx.Err()
 	cancel()

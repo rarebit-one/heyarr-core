@@ -17,7 +17,7 @@ func TestCheckPrivateBlobRejectsPathSwapAfterHash(t *testing.T) {
 	err := s.checkPrivateBlob(context.Background(), blob.Hash, func() {
 		path := s.blobPath(blob.Hash)
 		replacement := filepath.Join(filepath.Dir(path), "replacement")
-		if err := os.WriteFile(replacement, []byte("known bytes"), 0440); err != nil {
+		if err := os.WriteFile(replacement, []byte("known bytes"), 0o440); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Rename(replacement, path); err != nil {

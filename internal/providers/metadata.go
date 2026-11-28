@@ -162,11 +162,15 @@ type RecordingCandidate struct {
 	Artists        []RecordingArtist  `json:"artists,omitempty"`
 	Releases       []RecordingRelease `json:"releases,omitempty"`
 }
+
+// RecordingArtist is one credited artist returned by a recording search.
 type RecordingArtist struct {
 	ID         string `json:"id,omitempty"`
 	Name       string `json:"name"`
 	JoinPhrase string `json:"join_phrase,omitempty"`
 }
+
+// RecordingRelease is a release associated with a recording search result.
 type RecordingRelease struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`

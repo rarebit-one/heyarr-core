@@ -2,7 +2,6 @@ package mcp_test
 
 import (
 	"fmt"
-	"github.com/rarebit-one/heyarr-core/internal/providers/musicbrainz"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/rarebit-one/heyarr-core/internal/domain/followed"
 	"github.com/rarebit-one/heyarr-core/internal/providers"
+	"github.com/rarebit-one/heyarr-core/internal/providers/musicbrainz"
 )
 
 // discover_content over the real JSON-RPC surface (#451). It shares

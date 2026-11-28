@@ -25,11 +25,11 @@ func (s *FS) checkPrivateBlob(ctx context.Context, h hashing.Hash, afterHash fun
 		return err
 	}
 	path := s.blobPath(h)
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- the path is derived from the validated blob digest
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	before, err := f.Stat()
 	if err != nil {
 		return err
@@ -59,9 +59,10 @@ func (s *FS) checkPrivateBlob(ctx context.Context, h hashing.Hash, afterHash fun
 	}
 	return nil
 }
+
 func privateFileInfo(info os.FileInfo) error {
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || !info.Mode().IsRegular() || stat.Nlink != 1 || info.Mode().Perm()&0222 != 0 {
+	if !ok || !info.Mode().IsRegular() || stat.Nlink != 1 || info.Mode().Perm()&0o222 != 0 {
 		return fmt.Errorf("cas: blob has mutable or unproven external links")
 	}
 	return nil

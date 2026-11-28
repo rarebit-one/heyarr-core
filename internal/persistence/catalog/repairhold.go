@@ -68,6 +68,7 @@ func (c *Catalog) HoldAcquisitionForRepair(ctx context.Context, id, detail strin
 	return nil
 }
 
+// AcquisitionRepairHeld reports whether a want is paused for node-local repair.
 func (c *Catalog) AcquisitionRepairHeld(ctx context.Context, id string) (bool, error) {
 	var n int
 	err := c.db.Reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM acquisition_repair_holds WHERE desired_item_id=?)`, id).Scan(&n)
